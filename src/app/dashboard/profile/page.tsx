@@ -1,3 +1,6 @@
+// src\app\dashboard\profile\page.tsx
+
+
 "use client";
 import { useEffect, useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
@@ -85,29 +88,62 @@ export default function ProfilePage() {
   };
 
   // ===== Fetch logged user profile =====
-  useEffect(() => {
-    const stored = localStorage.getItem("user");
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored);
-        if (parsed?._id) {
-          fetch(`/api/profile?userId=${encodeURIComponent(parsed._id)}`)
-            .then((res) => res.json())
-            .then((data) => {
-              if (data?.error) {
-                toast.error(data.error);
-              } else {
-                setUser(data);
-                setOriginalUser(data);
-              }
-            })
-            .catch(() => toast.error("Failed to load profile ❌"));
-        }
-      } catch {
-        /* ignore */
+  // src/app/dashboard/profile/page.tsx
+useEffect(() => {
+  const stored = localStorage.getItem("user");
+  const remember = localStorage.getItem("rememberMe");
+
+  if (!stored) {
+    // no session at all → go to login
+    router.push("/login");
+    return;
+  }
+
+  let parsed: any = null;
+  try {
+    parsed = JSON.parse(stored);
+  } catch {
+    localStorage.removeItem("user");
+    localStorage.removeItem("rememberMe");
+    router.push("/login");
+    return;
+  }
+
+  if (!parsed?._id) {
+    localStorage.removeItem("user");
+    localStorage.removeItem("rememberMe");
+    router.push("/login");
+    return;
+  }
+
+  const loadProfile = async () => {
+    try {
+      const res = await fetch(
+        `/api/profile?userId=${encodeURIComponent(parsed._id)}`
+      );
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok || !data || data.error) {
+        // e.g. 400 (UserId required) or 404 (User not found)
+        toast.error(data?.error || "Failed to load profile ❌");
+
+        // Clean up bad session and send user to login
+        localStorage.removeItem("user");
+        localStorage.removeItem("rememberMe");
+        router.push("/login");
+        return;
       }
+
+      setUser(data);
+      setOriginalUser(data);
+    } catch {
+      toast.error("Failed to load profile ❌");
     }
-  }, []);
+  };
+
+  loadProfile();
+}, [router]);
+
 
   // ===== Fetch seller/billing details (last saved) =====
   useEffect(() => {
