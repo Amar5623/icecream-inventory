@@ -121,12 +121,10 @@ export default function BillingPage() {
   };
 
   const generateSerial = () => {
-    // pattern: MM + 4-digit serial (per month, stored in localStorage)
     const now = new Date();
-    const month = String(now.getMonth() + 1).padStart(2, "0"); // 01..12
+    const month = String(now.getMonth() + 1).padStart(2, "0");
     const year = now.getFullYear();
     const key = `serial-${month}-${year}`;
-    // stored value may be padded string like "0001"
     let last = Number(localStorage.getItem(key) || "0");
     last = last + 1;
     if (last > 9999) last = 1;
@@ -207,14 +205,11 @@ export default function BillingPage() {
       "0"
     )}-${String(now.getMonth() + 1).padStart(2, "0")}-${now.getFullYear()}`;
     setDate(formatted);
-
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // --- Fetch Bank based on seller._id (or fallback from seller doc) ---
   useEffect(() => {
     if (!seller?._id) {
-      // fallback: some bank fields may already be in seller doc
       if (
         seller &&
         (seller.bankName ||
@@ -313,10 +308,8 @@ export default function BillingPage() {
       const item = newItems[index];
       if (!item) return prev;
 
-      // apply changes
       Object.assign(item, changes);
 
-      // auto-match product when productName changes
       if (
         changes.productName !== undefined &&
         typeof item.productName === "string" &&
@@ -331,11 +324,9 @@ export default function BillingPage() {
         }
       }
 
-      // normalize numbers
       item.quantity = Number(item.quantity || 0);
       item.price = Number(item.price || 0);
 
-      // enforce stock limit when quantity changed
       if (changes.quantity !== undefined) {
         const matched = findProductByName(item.productName);
         const stock = getProductStock(matched);
@@ -353,7 +344,6 @@ export default function BillingPage() {
         }
       }
 
-      // recalc total
       item.total = item.free
         ? 0
         : Number((item.price || 0) * (item.quantity || 0));
@@ -362,7 +352,6 @@ export default function BillingPage() {
     });
   };
 
-  // toggle free
   const toggleFree = (index: number, v: boolean) => {
     setItems((prev) => {
       const newItems = prev.map((it) => ({ ...it }));
@@ -382,7 +371,7 @@ export default function BillingPage() {
     0
   );
 
-  // ✅ Total quantity counts ONLY "box" units
+  // total boxes only
   const totalQty = items.reduce((acc, it) => {
     if (!isBoxUnit(it.unit)) return acc;
     return acc + (Number(it.quantity) || 0);
@@ -417,413 +406,420 @@ export default function BillingPage() {
     }
   };
 
-  // ===== PDF Export with validation + pagination header/footer =====
-const exportPDF = async () => {
-  // ===== VALIDATION =====
-  if (!billingCustomer || !billingCustomer.name?.trim()) {
-    toast.error("Please select a Billing customer before generating PDF.");
-    return;
-  }
-  if (!billingCustomer.address?.trim()) {
-    toast.error("Billing address is required to generate PDF.");
-    return;
-  }
-
-  const shName = sameAsBilling ? billingCustomer.name : shippingCustomer?.name;
-  const shAddress = sameAsBilling
-    ? billingCustomer.address
-    : shippingCustomer?.address;
-
-  if (!shName?.trim() || !shAddress?.trim()) {
-    toast.error("Shipping customer name and address are required.");
-    return;
-  }
-
-  if (!seller) {
-    toast.error("Seller/Bill profile is missing.");
-    return;
-  }
-
-  if (!seller.sellerName || !seller.fullAddress) {
-    toast.error("Seller name and address required.");
-    return;
-  }
-
-  if (!seller.logoUrl || !seller.qrCodeUrl || !seller.signatureUrl) {
-    toast.error("Logo, QR and Signature are required.");
-    return;
-  }
-
-  const bankNameText = bank?.bankName || seller.bankName;
-  const accNoText =
-    bank?.accountNumber ||
-    (seller as any)?.accountNumber ||
-    (seller as any)?.accountNo;
-  const ifscText = bank?.ifscCode || (seller as any)?.ifscCode;
-  const inFavorText = bank?.bankingName || seller.bankingName;
-
-  if (!bankNameText || !accNoText || !ifscText || !inFavorText) {
-    toast.error("Complete bank details required.");
-    return;
-  }
-
-  const filledItems = items.filter(
-    (it) =>
-      it.productName &&
-      it.productName.trim() !== "" &&
-      it.quantity &&
-      it.quantity > 0
-  );
-  if (!filledItems.length) {
-    toast.error("Add at least one product with quantity.");
-    return;
-  }
-
-  // ===== IMAGE FETCH =====
-  const fetchImageAsDataURL = async (url?: string | null) => {
-    if (!url) return null;
-    try {
-      if (url.startsWith("data:")) return url;
-      const resp = await fetch(url);
-      if (!resp.ok) return null;
-      const blob = await resp.blob();
-      return await new Promise<string | null>((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () =>
-          resolve(typeof reader.result === "string" ? reader.result : null);
-        reader.readAsDataURL(blob);
-      });
-    } catch {
-      return null;
+  // ===== PDF Export with consistent formatting on ALL pages =====
+  const exportPDF = async () => {
+    // validation (same as you already had)
+    if (!billingCustomer || !billingCustomer.name?.trim()) {
+      toast.error("Please select a Billing customer before generating PDF.");
+      return;
     }
-  };
-
-  const logoDataUrl = await fetchImageAsDataURL(seller.logoUrl);
-  const qrDataUrl = await fetchImageAsDataURL(seller.qrCodeUrl);
-  const sigDataUrl = await fetchImageAsDataURL(seller.signatureUrl);
-
-  // ===== PDF INITIALIZE =====
-  const doc = new jsPDF("p", "pt", "a4");
-  const pageWidth = doc.internal.pageSize.getWidth();
-  const pageHeight = doc.internal.pageSize.getHeight();
-
-  const margin = {
-    top: 190,
-    bottom: 140,
-    left: 40,
-    right: 40,
-  };
-
-  // ===== HEADER (REPEATED) =====
-  const drawHeader = (pageNumber: number, totalPages: number) => {
-    const topY = 30;
-
-    if (logoDataUrl) {
-      try {
-        doc.addImage(logoDataUrl, "PNG", margin.left, topY - 10, 60, 60);
-      } catch {}
+    if (!billingCustomer.address?.trim()) {
+      toast.error("Billing address is required to generate PDF.");
+      return;
     }
 
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(18);
-    doc.text(
-      (seller?.sellerName || "SELLER").toUpperCase(),
-      pageWidth / 2,
-      topY + 5,
-      { align: "center" }
-    );
+    const shName = sameAsBilling
+      ? billingCustomer.name
+      : shippingCustomer?.name;
+    const shAddress = sameAsBilling
+      ? billingCustomer.address
+      : shippingCustomer?.address;
 
-    doc.setFont("helvetica", "normal").setFontSize(10);
-    doc.text(seller?.fullAddress || "-", pageWidth / 2, topY + 22, {
-      align: "center",
-      maxWidth: pageWidth - 80,
-    });
-
-    if (seller?.contact) {
-      doc.text(`Contact: ${seller.contact}`, pageWidth / 2, topY + 36, {
-        align: "center",
-      });
+    if (!shName?.trim() || !shAddress?.trim()) {
+      toast.error("Shipping customer name and address are required.");
+      return;
     }
 
-    if (seller?.gstNumber) {
-      doc.text(`GSTIN: ${seller.gstNumber}`, pageWidth / 2, topY + 50, {
-        align: "center",
-      });
+    if (!seller) {
+      toast.error("Seller/Bill profile is missing.");
+      return;
     }
 
-    const compLine =
-      fixedLine ||
-      "composition taxable person not eligible to collect taxes on supplies";
+    if (!seller.sellerName || !seller.fullAddress) {
+      toast.error("Seller name and address required.");
+      return;
+    }
 
-    doc.setFont("helvetica", "italic").setFontSize(9);
-    doc.text(compLine, pageWidth / 2, topY + 66, {
-      align: "center",
-      maxWidth: pageWidth - 100,
-    });
+    if (!seller.logoUrl || !seller.qrCodeUrl || !seller.signatureUrl) {
+      toast.error("Logo, QR and Signature are required.");
+      return;
+    }
 
-    doc.setFont("helvetica", "bold").setFontSize(14);
-    doc.text("BILL OF SUPPLY", pageWidth / 2, topY + 82, { align: "center" });
-
-    doc.setFont("helvetica", "normal").setFontSize(9);
-    doc.text(`Serial: ${serialNo}`, pageWidth - margin.right, topY, {
-      align: "right",
-    });
-    doc.text(`Date: ${date}`, pageWidth - margin.right, topY + 12, {
-      align: "right",
-    });
-
-    doc.text(
-      `Page ${pageNumber} / ${totalPages}`,
-      pageWidth - margin.right,
-      topY + 24,
-      { align: "right" }
-    );
-
-    const boxTop = margin.top - 70;
-    const boxHeight = 70;
-    const gap = 12;
-    const boxWidth = (pageWidth - margin.left - margin.right - gap) / 2;
-
-    doc.setDrawColor(0);
-    doc.setLineWidth(0.7);
-
-    doc.rect(margin.left, boxTop, boxWidth, boxHeight);
-    doc.rect(margin.left + boxWidth + gap, boxTop, boxWidth, boxHeight);
-
-    doc.setFont("helvetica", "bold").setFontSize(10);
-    doc.text("Billing Details", margin.left + 6, boxTop + 14);
-    doc.text(
-      "Shipping Details",
-      margin.left + boxWidth + gap + 6,
-      boxTop + 14
-    );
-
-    doc.setFont("helvetica", "normal").setFontSize(9);
-
-    const billName = billingCustomer?.name || "-";
-    const billAddr = billingCustomer?.address || "-";
-    const billContact = billingCustomer?.contact || "-";
-
-    const shipName = sameAsBilling ? billName : shippingCustomer?.name || "-";
-    const shipAddr = sameAsBilling ? billAddr : shippingCustomer?.address || "-";
-    const shipContact = sameAsBilling
-      ? billContact
-      : shippingCustomer?.contact || "-";
-
-    let y = boxTop + 28;
-
-    doc.text(`Name: ${billName}`, margin.left + 6, y);
-    y += 12;
-    doc.text(`Address: ${billAddr}`, margin.left + 6, y);
-    y += 12;
-    doc.text(`Contact: ${billContact}`, margin.left + 6, y);
-
-    let y2 = boxTop + 28;
-    const sx = margin.left + boxWidth + gap + 6;
-    doc.text(`Name: ${shipName}`, sx, y2);
-    y2 += 12;
-    doc.text(`Address: ${shipAddr}`, sx, y2);
-    y2 += 12;
-    doc.text(`Contact: ${shipContact}`, sx, y2);
-
-    doc.line(
-      margin.left,
-      margin.top + 8,
-      pageWidth - margin.right,
-      margin.top + 8
-    );
-  };
-
-  // ===== FOOTER (REPEATED) =====
-  const drawFooter = () => {
-    const footerTop = pageHeight - margin.bottom + 10;
-
-    doc.setDrawColor(0);
-    doc.setLineWidth(0.6);
-    doc.line(margin.left, footerTop, pageWidth - margin.right, footerTop);
-
-    doc.setFont("helvetica", "bold").setFontSize(11);
-    doc.text("Payment & Banking Details", margin.left, footerTop + 16);
-
-    const bankNameText2 = bank?.bankName || seller.bankName || "-";
-    const branchText2 = bank?.branchName || seller.branchName || "-";
-    const accNoText2 =
+    const bankNameText = bank?.bankName || seller.bankName;
+    const accNoText =
       bank?.accountNumber ||
       (seller as any)?.accountNumber ||
-      (seller as any)?.accountNo ||
-      "-";
-    const ifscText2 = bank?.ifscCode || (seller as any)?.ifscCode || "-";
-    const inFavorText2 = bank?.bankingName || seller.bankingName || "-";
+      (seller as any)?.accountNo;
+    const ifscText = bank?.ifscCode || (seller as any)?.ifscCode;
+    const inFavorText = bank?.bankingName || seller.bankingName;
 
-    let lineY = footerTop + 32;
-    const lineGap = 12;
-    doc.setFont("helvetica", "normal").setFontSize(9);
-    doc.text(`Bank: ${bankNameText2}`, margin.left, lineY);
-    lineY += lineGap;
-    doc.text(`Branch: ${branchText2}`, margin.left, lineY);
-    lineY += lineGap;
-    doc.text(`Account No.: ${accNoText2}`, margin.left, lineY);
-    lineY += lineGap;
-    doc.text(`IFSC: ${ifscText2}`, margin.left, lineY);
-    lineY += lineGap;
-    doc.text(`In favour of: ${inFavorText2}`, margin.left, lineY);
-
-    if (qrDataUrl) {
-      doc.addImage(
-        qrDataUrl,
-        "PNG",
-        pageWidth / 2 - 35,
-        footerTop + 20,
-        70,
-        70
-      );
+    if (!bankNameText || !accNoText || !ifscText || !inFavorText) {
+      toast.error("Complete bank details required.");
+      return;
     }
 
-    if (sigDataUrl) {
-      const sigW = 110;
-      const sigH = 50;
-      const sigX = pageWidth - margin.right - sigW;
-      const sigY = footerTop + 26;
+    const filledItems = items.filter(
+      (it) =>
+        it.productName &&
+        it.productName.trim() !== "" &&
+        it.quantity &&
+        it.quantity > 0
+    );
+    if (!filledItems.length) {
+      toast.error("Add at least one product with quantity.");
+      return;
+    }
 
-      doc.addImage(sigDataUrl, "PNG", sigX, sigY, sigW, sigH);
-      doc.setFont("helvetica", "italic").setFontSize(8);
-      doc.text("Signature of the Supplier", sigX + sigW / 2, sigY - 4, {
+    // image helper
+    const fetchImageAsDataURL = async (url?: string | null) => {
+      if (!url) return null;
+      try {
+        if (url.startsWith("data:")) return url;
+        const resp = await fetch(url);
+        if (!resp.ok) return null;
+        const blob = await resp.blob();
+        return await new Promise<string | null>((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () =>
+            resolve(typeof reader.result === "string" ? reader.result : null);
+          reader.readAsDataURL(blob);
+        });
+      } catch {
+        return null;
+      }
+    };
+
+    const logoDataUrl = await fetchImageAsDataURL(seller.logoUrl);
+    const qrDataUrl = await fetchImageAsDataURL(seller.qrCodeUrl);
+    const sigDataUrl = await fetchImageAsDataURL(seller.signatureUrl);
+
+    const doc = new jsPDF("p", "pt", "a4");
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+
+    const margin = {
+      top: 190, // header + billing/shipping boxes
+      bottom: 140,
+      left: 40,
+      right: 40,
+    };
+
+    // where table really starts on every page
+    const tableTop = margin.top + 18;
+
+    const drawHeader = (pageNumber: number, totalPages: number) => {
+      const topY = 30;
+
+      if (logoDataUrl) {
+        try {
+          doc.addImage(logoDataUrl, "PNG", margin.left, topY - 10, 60, 60);
+        } catch {}
+      }
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(18);
+      doc.text(
+        (seller?.sellerName || "SELLER").toUpperCase(),
+        pageWidth / 2,
+        topY + 5,
+        { align: "center" }
+      );
+
+      doc.setFont("helvetica", "normal").setFontSize(10);
+      doc.text(seller?.fullAddress || "-", pageWidth / 2, topY + 22, {
         align: "center",
+        maxWidth: pageWidth - 80,
+      });
+
+      if (seller?.contact) {
+        doc.text(`Contact: ${seller.contact}`, pageWidth / 2, topY + 36, {
+          align: "center",
+        });
+      }
+
+      if (seller?.gstNumber) {
+        doc.text(`GSTIN: ${seller.gstNumber}`, pageWidth / 2, topY + 50, {
+          align: "center",
+        });
+      }
+
+      const compLine =
+        fixedLine ||
+        "composition taxable person not eligible to collect taxes on supplies";
+
+      doc.setFont("helvetica", "italic").setFontSize(9);
+      doc.text(compLine, pageWidth / 2, topY + 66, {
+        align: "center",
+        maxWidth: pageWidth - 100,
+      });
+
+      doc.setFont("helvetica", "bold").setFontSize(14);
+      doc.text("BILL OF SUPPLY", pageWidth / 2, topY + 82, {
+        align: "center",
+      });
+
+      doc.setFont("helvetica", "normal").setFontSize(9);
+      doc.text(`Serial: ${serialNo}`, pageWidth - margin.right, topY, {
+        align: "right",
+      });
+      doc.text(`Date: ${date}`, pageWidth - margin.right, topY + 12, {
+        align: "right",
+      });
+
+      doc.text(
+        `Page ${pageNumber} / ${totalPages}`,
+        pageWidth - margin.right,
+        topY + 24,
+        { align: "right" }
+      );
+
+      const boxTop = margin.top - 70;
+      const boxHeight = 70;
+      const gap = 12;
+      const boxWidth = (pageWidth - margin.left - margin.right - gap) / 2;
+
+      doc.setDrawColor(0);
+      doc.setLineWidth(0.7);
+
+      doc.rect(margin.left, boxTop, boxWidth, boxHeight);
+      doc.rect(margin.left + boxWidth + gap, boxTop, boxWidth, boxHeight);
+
+      doc.setFont("helvetica", "bold").setFontSize(10);
+      doc.text("Billing Details", margin.left + 6, boxTop + 14);
+      doc.text(
+        "Shipping Details",
+        margin.left + boxWidth + gap + 6,
+        boxTop + 14
+      );
+
+      doc.setFont("helvetica", "normal").setFontSize(9);
+
+      const billName = billingCustomer?.name || "-";
+      const billAddr = billingCustomer?.address || "-";
+      const billContact = billingCustomer?.contact || "-";
+
+      const shipName = sameAsBilling ? billName : shippingCustomer?.name || "-";
+      const shipAddr = sameAsBilling
+        ? billAddr
+        : shippingCustomer?.address || "-";
+      const shipContact = sameAsBilling
+        ? billContact
+        : shippingCustomer?.contact || "-";
+
+      let y = boxTop + 28;
+
+      doc.text(`Name: ${billName}`, margin.left + 6, y);
+      y += 12;
+      doc.text(`Address: ${billAddr}`, margin.left + 6, y);
+      y += 12;
+      doc.text(`Contact: ${billContact}`, margin.left + 6, y);
+
+      let y2 = boxTop + 28;
+      const sx = margin.left + boxWidth + gap + 6;
+      doc.text(`Name: ${shipName}`, sx, y2);
+      y2 += 12;
+      doc.text(`Address: ${shipAddr}`, sx, y2);
+      y2 += 12;
+      doc.text(`Contact: ${shipContact}`, sx, y2);
+
+      // horizontal line just above table (same on ALL pages)
+      doc.line(
+        margin.left,
+        tableTop - 10,
+        pageWidth - margin.right,
+        tableTop - 10
+      );
+    };
+
+    const drawFooter = () => {
+      const footerTop = pageHeight - margin.bottom + 10;
+
+      doc.setDrawColor(0);
+      doc.setLineWidth(0.6);
+      doc.line(margin.left, footerTop, pageWidth - margin.right, footerTop);
+
+      doc.setFont("helvetica", "bold").setFontSize(11);
+      doc.text("Payment & Banking Details", margin.left, footerTop + 16);
+
+      const bankNameText2 = bank?.bankName || seller.bankName || "-";
+      const branchText2 = bank?.branchName || seller.branchName || "-";
+      const accNoText2 =
+        bank?.accountNumber ||
+        (seller as any)?.accountNumber ||
+        (seller as any)?.accountNo ||
+        "-";
+      const ifscText2 = bank?.ifscCode || (seller as any)?.ifscCode || "-";
+      const inFavorText2 = bank?.bankingName || seller.bankingName || "-";
+
+      let lineY = footerTop + 32;
+      const lineGap = 12;
+      doc.setFont("helvetica", "normal").setFontSize(9);
+      doc.text(`Bank: ${bankNameText2}`, margin.left, lineY);
+      lineY += lineGap;
+      doc.text(`Branch: ${branchText2}`, margin.left, lineY);
+      lineY += lineGap;
+      doc.text(`Account No.: ${accNoText2}`, margin.left, lineY);
+      lineY += lineGap;
+      doc.text(`IFSC: ${ifscText2}`, margin.left, lineY);
+      lineY += lineGap;
+      doc.text(`In favour of: ${inFavorText2}`, margin.left, lineY);
+
+      if (qrDataUrl) {
+        doc.addImage(
+          qrDataUrl,
+          "PNG",
+          pageWidth / 2 - 35,
+          footerTop + 20,
+          70,
+          70
+        );
+      }
+
+      if (sigDataUrl) {
+        const sigW = 110;
+        const sigH = 50;
+        const sigX = pageWidth - margin.right - sigW;
+        const sigY = footerTop + 26;
+
+        doc.addImage(sigDataUrl, "PNG", sigX, sigY, sigW, sigH);
+        doc.setFont("helvetica", "italic").setFontSize(8);
+        doc.text("Signature of the Supplier", sigX + sigW / 2, sigY - 4, {
+          align: "center",
+        });
+      }
+
+      doc.setFont("helvetica", "normal").setFontSize(9);
+      doc.text(
+        seller?.slogan || "Thank you for your business!",
+        pageWidth / 2,
+        pageHeight - 22,
+        { align: "center" }
+      );
+    };
+
+    // table body + totals
+    const tableBody = filledItems.map((it, idx) => [
+      `${idx + 1}`,
+      it.productName,
+      String(it.quantity),
+      it.unit || "-",
+      it.free ? "FREE" : Number(it.price).toFixed(2),
+      it.free ? "FREE" : Number(it.total).toFixed(2),
+    ]);
+
+    const subtotal = filledItems.reduce(
+      (acc, it) => acc + (it.free ? 0 : it.total),
+      0
+    );
+    const discountAmount = (subtotal * (discountPercent || 0)) / 100;
+    const grandTotal = subtotal - discountAmount;
+
+    autoTable(doc, {
+      head: [["#", "Particulars", "Qty", "Unit", "Price (Rs.)", "Total (Rs.)"]],
+      body: tableBody,
+      foot: [
+        [
+          {
+            content: `Total Boxes: ${totalQty}`,
+            colSpan: 6,
+            styles: { halign: "left" },
+          },
+        ],
+        [
+          { content: "Subtotal", colSpan: 5, styles: { halign: "right" } },
+          { content: subtotal.toFixed(2), styles: { halign: "center" } },
+        ],
+        [
+          {
+            content: `Discount (${discountPercent}%)`,
+            colSpan: 5,
+            styles: { halign: "right" },
+          },
+          { content: discountAmount.toFixed(2), styles: { halign: "center" } },
+        ],
+        [
+          { content: "Total", colSpan: 5, styles: { halign: "right" } },
+          {
+            content: grandTotal.toFixed(2),
+            styles: { halign: "center", fontStyle: "bold" },
+          },
+        ],
+      ],
+
+      // IMPORTANT: tableTop used as margin.top so ALL pages align the same
+      margin: {
+        top: tableTop,
+        bottom: margin.bottom,
+        left: margin.left,
+        right: margin.right,
+      },
+
+      theme: "grid",
+
+      styles: {
+        fontSize: 10,
+        cellPadding: 6,
+        halign: "center",
+        valign: "middle",
+        lineColor: [0, 0, 0],
+        lineWidth: 0.7,
+      },
+
+      headStyles: {
+        fillColor: [240, 240, 240],
+        textColor: [0, 0, 0],
+        fontStyle: "bold",
+        lineColor: [0, 0, 0],
+        lineWidth: 0.7,
+      },
+
+      bodyStyles: {
+        lineColor: [0, 0, 0],
+        lineWidth: 0.7,
+      },
+
+      footStyles: {
+        fillColor: [255, 255, 255],
+        textColor: [0, 0, 0],
+        fontStyle: "bold",
+        lineColor: [0, 0, 0],
+        lineWidth: 0.7,
+      },
+
+      columnStyles: { 1: { halign: "left" } },
+
+      didDrawPage: () => {
+        const pageInfo = (doc.internal as any).getCurrentPageInfo();
+        drawHeader(
+          pageInfo.pageNumber,
+          (doc.internal as any).getNumberOfPages()
+        );
+        drawFooter();
+      },
+    });
+
+    const pages = (doc.internal as any).getNumberOfPages();
+    doc.setPage(pages);
+
+    if (remarks.trim()) {
+      const y = pageHeight - margin.bottom - 40;
+      doc.setFont("helvetica", "bold").setFontSize(10);
+      doc.text("Remarks:", margin.left, y);
+      doc.setFont("helvetica", "normal").setFontSize(9);
+      doc.text(remarks, margin.left, y + 14, {
+        maxWidth: pageWidth - margin.left - margin.right,
       });
     }
 
-    doc.setFont("helvetica", "normal").setFontSize(9);
-    doc.text(
-      seller?.slogan || "Thank you for your business!",
-      pageWidth / 2,
-      pageHeight - 22,
-      { align: "center" }
-    );
+    doc.save(`Bill_${serialNo}.pdf`);
   };
-
-  // ===== TABLE =====
-  const tableBody = filledItems.map((it, idx) => [
-    `${idx + 1}`,
-    it.productName,
-    String(it.quantity),
-    it.unit || "-",
-    it.free ? "FREE" : Number(it.price).toFixed(2),
-    it.free ? "FREE" : Number(it.total).toFixed(2),
-  ]);
-
-  const subtotal = filledItems.reduce(
-    (acc, it) => acc + (it.free ? 0 : it.total),
-    0
-  );
-  const discountAmount = (subtotal * discountPercent) / 100;
-  const grandTotal = subtotal - discountAmount;
-
-  autoTable(doc, {
-    head: [["#", "Particulars", "Qty", "Unit", "Price (Rs.)", "Total (Rs.)"]],
-    body: tableBody,
-    foot: [
-      [
-        {
-          content: `Total Boxes: ${totalQty}`,
-          colSpan: 6,
-          styles: { halign: "left" },
-        },
-      ],
-      [
-        { content: "Subtotal", colSpan: 5, styles: { halign: "right" } },
-        { content: subtotal.toFixed(2), styles: { halign: "center" } },
-      ],
-      [
-        {
-          content: `Discount (${discountPercent}%)`,
-          colSpan: 5,
-          styles: { halign: "right" },
-        },
-        { content: discountAmount.toFixed(2), styles: { halign: "center" } },
-      ],
-      [
-        { content: "Total", colSpan: 5, styles: { halign: "right" } },
-        {
-          content: grandTotal.toFixed(2),
-          styles: { halign: "center", fontStyle: "bold" },
-        },
-      ],
-    ],
-
-    startY: margin.top + 18, // FIXED GAP
-
-    margin,
-
-    theme: "grid",
-
-    // ===== DARKER GRID LINES =====
-    styles: {
-      fontSize: 10,
-      cellPadding: 6,
-      halign: "center",
-      valign: "middle",
-      lineColor: [0, 0, 0],
-      lineWidth: 0.7, // DARKER
-    },
-
-    headStyles: {
-      fillColor: [240, 240, 240],
-      textColor: [0, 0, 0],
-      fontStyle: "bold",
-      lineColor: [0, 0, 0],
-      lineWidth: 0.7,
-    },
-
-    bodyStyles: {
-      lineColor: [0, 0, 0],
-      lineWidth: 0.7,
-    },
-
-    footStyles: {
-      fillColor: [255, 255, 255],
-      textColor: [0, 0, 0],
-      fontStyle: "bold",
-      lineColor: [0, 0, 0],
-      lineWidth: 0.7,
-    },
-
-    columnStyles: { 1: { halign: "left" } },
-
-    didDrawPage: () => {
-      const pageInfo = (doc.internal as any).getCurrentPageInfo();
-      drawHeader(
-        pageInfo.pageNumber,
-        (doc.internal as any).getNumberOfPages()
-      );
-      drawFooter();
-    },
-  });
-
-  const pages = (doc.internal as any).getNumberOfPages();
-  doc.setPage(pages);
-
-  if (remarks.trim()) {
-    const y = pageHeight - margin.bottom - 40;
-    doc.setFont("helvetica", "bold").setFontSize(10);
-    doc.text("Remarks:", margin.left, y);
-    doc.setFont("helvetica", "normal").setFontSize(9);
-    doc.text(remarks, margin.left, y + 14, {
-      maxWidth: pageWidth - margin.left - margin.right,
-    });
-  }
-
-  doc.save(`Bill_${serialNo}.pdf`);
-};
-
-
 
   // ===== UI =====
   return (
     <div className="flex flex-col min-h-screen bg-gray-50">
       <DashboardNavbar />
 
-      {/* PRINT HEADER (screen also uses this as top card) */}
-      <header className="bg-white border-b print:fixed print:top-0 print:left-0 print:right-0 print:shadow-sm print:bg-white">
+      <header className="bg-white border-b">
         <div className="max-w-7xl mx-auto px-6 py-4">
           <div className="flex items-start justify-between gap-4">
             <div className="flex items-center gap-4">
@@ -843,9 +839,7 @@ const exportPDF = async () => {
               <h2 className="text-xl font-bold text-gray-700">
                 {seller?.sellerName || "Seller Name"}
               </h2>
-              <p className="text-sm text-gray-700">
-                {seller?.contact || "-"}
-              </p>
+              <p className="text-sm text-gray-700">{seller?.contact || "-"}</p>
               <p className="text-sm text-gray-700">
                 {seller?.fullAddress || "-"}
               </p>
@@ -853,7 +847,6 @@ const exportPDF = async () => {
                 GST: {seller?.gstNumber || "-"}
               </p>
               <div className="mt-1">
-                {/* visible textarea (editable) on screen */}
                 <textarea
                   value={fixedLine}
                   onChange={(e) => setFixedLine(e.target.value)}
@@ -871,7 +864,7 @@ const exportPDF = async () => {
         </div>
       </header>
 
-      <main className="flex-grow container mx-auto px-6 py-8 print:mt-44 print:mb-32">
+      <main className="flex-grow container mx-auto px-6 py-8">
         <div className="bg-white rounded-lg shadow p-6 text-gray-900">
           <h1 className="text-3xl font-bold text-center mb-6">
             BILL OF SUPPLY
@@ -880,18 +873,13 @@ const exportPDF = async () => {
           {/* BILLING / SHIPPING */}
           <div className="grid grid-cols-2 gap-6 mb-4">
             <div>
-              <h3 className="text-sm font-semibold mb-1">
-                Billing Details
-              </h3>
-
+              <h3 className="text-sm font-semibold mb-1">Billing Details</h3>
               <div className="flex gap-2">
                 <input
                   suppressHydrationWarning
                   list="customer-suggestions"
                   value={customerInput}
-                  onChange={(e) =>
-                    onCustomerInputChange(e.target.value)
-                  }
+                  onChange={(e) => onCustomerInputChange(e.target.value)}
                   placeholder="Type or pick a customer name..."
                   className="w-full border p-2 rounded text-gray-900"
                 />
@@ -917,27 +905,21 @@ const exportPDF = async () => {
                   <strong>Name:</strong> {billingCustomer?.name || "-"}
                 </div>
                 <div>
-                  <strong>Address:</strong>{" "}
-                  {billingCustomer?.address || "-"}
+                  <strong>Address:</strong> {billingCustomer?.address || "-"}
                 </div>
                 <div>
-                  <strong>Contact:</strong>{" "}
-                  {billingCustomer?.contact || "-"}
+                  <strong>Contact:</strong> {billingCustomer?.contact || "-"}
                 </div>
               </div>
             </div>
 
             <div>
-              <h3 className="text-sm font-semibold mb-1">
-                Shipping Details
-              </h3>
+              <h3 className="text-sm font-semibold mb-1">Shipping Details</h3>
               <label className="flex items-center gap-2 text-sm">
                 <input
                   type="checkbox"
                   checked={sameAsBilling}
-                  onChange={(e) =>
-                    setSameAsBilling(e.target.checked)
-                  }
+                  onChange={(e) => setSameAsBilling(e.target.checked)}
                 />
                 Same as Billing
               </label>
@@ -949,12 +931,10 @@ const exportPDF = async () => {
                   placeholder="Type or pick shipping customer (optional)"
                   className="w-full border p-2 rounded text-gray-900 mt-2"
                   onBlur={(e) => {
-                    const val =
-                      e.currentTarget.value.trim().toLowerCase();
+                    const val = e.currentTarget.value.trim().toLowerCase();
                     if (!val) return;
                     const match = customers.find(
-                      (c) =>
-                        c.name?.trim().toLowerCase() === val
+                      (c) => c.name?.trim().toLowerCase() === val
                     );
                     if (match) setShippingCustomer(match);
                   }}
@@ -1000,12 +980,8 @@ const exportPDF = async () => {
               <thead>
                 <tr className="bg-gray-100 text-sm">
                   <th className="border px-2 py-2">#</th>
-                  <th className="border px-2 py-2">
-                    Product (suggestions)
-                  </th>
-                  <th className="border px-2 py-2">
-                    Quantity
-                  </th>
+                  <th className="border px-2 py-2">Product (suggestions)</th>
+                  <th className="border px-2 py-2">Quantity</th>
                   <th className="border px-2 py-2">Price</th>
                   <th className="border px-2 py-2">Total</th>
                   <th className="border px-2 py-2">Free</th>
@@ -1013,9 +989,7 @@ const exportPDF = async () => {
               </thead>
               <tbody>
                 {items.map((it, idx) => {
-                  const matched = findProductByName(
-                    it.productName
-                  );
+                  const matched = findProductByName(it.productName);
                   const stock = getProductStock(matched);
 
                   return (
@@ -1043,9 +1017,7 @@ const exportPDF = async () => {
                         {matched && typeof stock === "number" && (
                           <div className="mt-1 text-[10px] text-gray-500">
                             In stock:{" "}
-                            <span className="font-semibold">
-                              {stock}
-                            </span>{" "}
+                            <span className="font-semibold">{stock}</span>{" "}
                             {matched.unit || "units"}
                           </div>
                         )}
@@ -1057,16 +1029,10 @@ const exportPDF = async () => {
                           type="number"
                           min={0}
                           step="any"
-                          value={
-                            it.quantity === 0
-                              ? ""
-                              : it.quantity
-                          }
+                          value={it.quantity === 0 ? "" : it.quantity}
                           onChange={(e) =>
                             updateItem(idx, {
-                              quantity: Number(
-                                e.target.value || 0
-                              ),
+                              quantity: Number(e.target.value || 0),
                             })
                           }
                           className="w-20 border rounded px-2 py-1 text-center text-gray-900"
@@ -1089,9 +1055,7 @@ const exportPDF = async () => {
                               value={it.price || ""}
                               onChange={(e) =>
                                 updateItem(idx, {
-                                  price: Number(
-                                    e.target.value || 0
-                                  ),
+                                  price: Number(e.target.value || 0),
                                 })
                               }
                               className="w-24 border rounded px-2 py-1 text-center text-gray-900"
@@ -1148,10 +1112,9 @@ const exportPDF = async () => {
             </table>
 
             <p className="mt-1 text-[11px] text-gray-500">
-              * Total Quantity counts only items whose unit is
-              &nbsp;
-              <span className="font-semibold">box/boxes</span>.
-              Units like ml / litre / piece are not included.
+              * Total Quantity counts only items whose unit is{" "}
+              <span className="font-semibold">box/boxes</span>. Units like ml /
+              litre / piece are not included.
             </p>
 
             <datalist id="product-suggestions">
@@ -1168,9 +1131,8 @@ const exportPDF = async () => {
                 + Add Line
               </button>
               <p className="text-xs text-gray-500">
-                Selecting a suggested product will auto-fill
-                price/unit (you can still edit manually).
-                Quantity is limited to available stock.
+                Selecting a suggested product will auto-fill price/unit (you can
+                still edit manually). Quantity is limited to available stock.
               </p>
             </div>
           </div>
@@ -1178,9 +1140,7 @@ const exportPDF = async () => {
           {/* DISCOUNT / TOTAL */}
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
             <div className="flex items-center gap-3">
-              <label className="text-sm font-medium">
-                Discount (%)
-              </label>
+              <label className="text-sm font-medium">Discount (%)</label>
               <input
                 suppressHydrationWarning
                 type="number"
@@ -1189,9 +1149,7 @@ const exportPDF = async () => {
                 step="any"
                 value={discountPercent || ""}
                 onChange={(e) =>
-                  setDiscountPercent(
-                    Number(e.target.value || 0)
-                  )
+                  setDiscountPercent(Number(e.target.value || 0))
                 }
                 className="w-28 border rounded px-2 py-1 text-gray-900"
               />
@@ -1209,9 +1167,7 @@ const exportPDF = async () => {
 
           {/* FOOTER - Payment & Banking (screen view) */}
           <div className="border-t pt-4">
-            <h3 className="text-sm font-semibold mb-2">
-              Payment & Banking
-            </h3>
+            <h3 className="text-sm font-semibold mb-2">Payment & Banking</h3>
             <div className="grid md:grid-cols-3 gap-4">
               <div className="text-sm">
                 <div>
@@ -1220,9 +1176,7 @@ const exportPDF = async () => {
                 </div>
                 <div>
                   <strong>Branch:</strong>{" "}
-                  {bank?.branchName ||
-                    seller?.branchName ||
-                    "-"}
+                  {bank?.branchName || seller?.branchName || "-"}
                 </div>
                 <div>
                   <strong>Account No:</strong>{" "}
@@ -1233,15 +1187,11 @@ const exportPDF = async () => {
                 </div>
                 <div>
                   <strong>IFSC:</strong>{" "}
-                  {bank?.ifscCode ||
-                    (seller as any)?.ifscCode ||
-                    "-"}
+                  {bank?.ifscCode || (seller as any)?.ifscCode || "-"}
                 </div>
                 <div>
                   <strong>In Favour of:</strong>{" "}
-                  {bank?.bankingName ||
-                    seller?.bankingName ||
-                    "-"}
+                  {bank?.bankingName || seller?.bankingName || "-"}
                 </div>
               </div>
 
