@@ -1,5 +1,4 @@
 // src/app/dashboard/billing/page.tsx
-
 "use client";
 import { useEffect, useState } from "react";
 import DashboardNavbar from "@/app/components/DashboardNavbar";
@@ -68,6 +67,15 @@ type BillItem = {
   free: boolean;
 };
 
+type QuantitySummary = {
+  piece: number;
+  box: number;
+  kg: number;
+  litre: number;
+  gm: number;
+  ml: number;
+};
+
 export default function BillingPage() {
   // seller + bank
   const [seller, setSeller] = useState<SellerDetails | null>(null);
@@ -76,6 +84,9 @@ export default function BillingPage() {
   // customers & products
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+
+  // logged in user
+  const [userId, setUserId] = useState<string | null>(null);
 
   // billing/shipping customer selection
   const [billingCustomer, setBillingCustomer] = useState<Customer | null>(null);
@@ -111,6 +122,10 @@ export default function BillingPage() {
   const [discountPercent, setDiscountPercent] = useState<number>(0);
   const [remarks, setRemarks] = useState<string>("");
 
+  // confirm dialog
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+
   // ===== Helpers =====
   const safeJson = async (res: Response) => {
     try {
@@ -140,10 +155,11 @@ export default function BillingPage() {
       return;
     }
     const parsed = JSON.parse(stored);
-    const userId = parsed._id;
+    const uid = parsed._id as string;
+    setUserId(uid);
 
     // --- Fetch Seller ---
-    fetch(`/api/seller-details?userId=${encodeURIComponent(userId)}`)
+    fetch(`/api/seller-details?userId=${encodeURIComponent(uid)}`)
       .then((r) => safeJson(r))
       .then((s) => {
         if (s && !s.error) {
@@ -153,7 +169,7 @@ export default function BillingPage() {
       .catch(() => {});
 
     // --- Fetch Customers ---
-    fetch(`/api/customers?userId=${encodeURIComponent(userId)}`)
+    fetch(`/api/customers?userId=${encodeURIComponent(uid)}`)
       .then((r) => safeJson(r))
       .then((data) => {
         if (!data) return;
@@ -172,7 +188,9 @@ export default function BillingPage() {
             contact: Array.isArray(c.contacts)
               ? c.contacts[0]
               : c.contacts ?? c.contact ?? "",
-            address: c.shopAddress ?? c.address ?? c.shopAddress ?? "",
+            address: c.shopAddress ?? c.address ?? "",
+            shopName: c.shopName ?? "",
+            shopAddress: c.shopAddress ?? c.address ?? "",
           }));
           setCustomers(mapped);
         }
@@ -180,7 +198,7 @@ export default function BillingPage() {
       .catch(() => {});
 
     // --- Fetch Products ---
-    fetch(`/api/products?userId=${encodeURIComponent(userId)}`)
+    fetch(`/api/products?userId=${encodeURIComponent(uid)}`)
       .then((r) => safeJson(r))
       .then((data) => {
         if (!data) return;
@@ -197,22 +215,18 @@ export default function BillingPage() {
       })
       .catch(() => {});
 
-    // --- Set Serial & Date ---
-        // --- Set Serial & Date (persist per tab using sessionStorage) ---
+    // --- Set Serial & Date (persist per tab using sessionStorage) ---
     try {
       const existingSerial = sessionStorage.getItem("billing-serial");
 
       if (existingSerial) {
-        // If we already generated a serial in this tab, reuse it
         setSerialNo(existingSerial);
       } else {
-        // First time in this tab: generate and store
         const newSerial = generateSerial();
         setSerialNo(newSerial);
         sessionStorage.setItem("billing-serial", newSerial);
       }
     } catch {
-      // Fallback if sessionStorage is not available for some reason
       const newSerial = generateSerial();
       setSerialNo(newSerial);
     }
@@ -223,7 +237,6 @@ export default function BillingPage() {
       "0"
     )}-${String(now.getMonth() + 1).padStart(2, "0")}-${now.getFullYear()}`;
     setDate(formatted);
-
   }, []);
 
   // --- Fetch Bank based on seller._id (or fallback from seller doc) ---
@@ -294,9 +307,7 @@ export default function BillingPage() {
     if (!name) return undefined;
     const cleaned = name.trim().toLowerCase();
     if (!cleaned) return undefined;
-    return products.find(
-      (p) => p.name.trim().toLowerCase() === cleaned
-    );
+    return products.find((p) => p.name.trim().toLowerCase() === cleaned);
   };
 
   const getProductStock = (p?: Product) => {
@@ -425,9 +436,154 @@ export default function BillingPage() {
     }
   };
 
+  // ===== Helper: basic validation before we open dialog / save =====
+  const validateBeforeSave = () => {
+    if (!billingCustomer || !billingCustomer.name?.trim()) {
+      toast.error("Please select a Billing customer before saving bill.");
+      return false;
+    }
+    if (!billingCustomer.address?.trim()) {
+      toast.error("Billing address is required.");
+      return false;
+    }
+    const filledItems = items.filter(
+      (it) =>
+        it.productName &&
+        it.productName.trim() !== "" &&
+        it.quantity &&
+        it.quantity > 0
+    );
+    if (!filledItems.length) {
+      toast.error("Add at least one product with quantity.");
+      return false;
+    }
+    if (!userId) {
+      toast.error("User not loaded. Please re-login.");
+      return false;
+    }
+    return true;
+  };
+
+  const handlePrepareBillClick = () => {
+    if (!validateBeforeSave()) return;
+    setShowConfirm(true);
+  };
+
+  // ===== Save Order + stock + customer debit =====
+  const confirmSaveBill = async () => {
+    if (!validateBeforeSave()) {
+      setShowConfirm(false);
+      return;
+    }
+
+    if (!billingCustomer || !userId) {
+      setShowConfirm(false);
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const filledItems = items.filter(
+        (it) =>
+          it.productName &&
+          it.productName.trim() !== "" &&
+          it.quantity &&
+          it.quantity > 0
+      );
+
+      // Quantity summary per unit
+      const quantitySummary: QuantitySummary = {
+        piece: 0,
+        box: 0,
+        kg: 0,
+        litre: 0,
+        gm: 0,
+        ml: 0,
+      };
+
+      filledItems.forEach((it) => {
+        const unitKey = it.unit?.toLowerCase() as keyof QuantitySummary;
+        if (quantitySummary[unitKey] !== undefined) {
+          quantitySummary[unitKey] += Number(it.quantity) || 0;
+        }
+      });
+
+      // Split paid vs free
+      const paidItems = filledItems
+        .filter((it) => !it.free)
+        .map((it) => {
+          const matched = findProductByName(it.productName);
+          return {
+            productId: matched?._id,
+            productName: it.productName,
+            quantity: Number(it.quantity) || 0,
+            unit: matched?.unit ?? it.unit ?? "",
+          };
+        });
+
+      const freeItems = filledItems
+        .filter((it) => it.free)
+        .map((it) => {
+          const matched = findProductByName(it.productName);
+          return {
+            productId: matched?._id,
+            productName: it.productName,
+            quantity: Number(it.quantity) || 0,
+            unit: matched?.unit ?? it.unit ?? "",
+          };
+        });
+
+      const orderId = `ORD-${Date.now()}`;
+
+      const payload = {
+        userId,
+        orderId,
+        serialNumber: serialNo,
+        shopName:
+          billingCustomer.shopName || billingCustomer.name || "Unknown Shop",
+        customerId: billingCustomer._id,
+        customerName: billingCustomer.name,
+        customerAddress:
+          billingCustomer.address ||
+          billingCustomer.shopAddress ||
+          "N/A",
+        customerContact: billingCustomer.contact || "",
+        items: paidItems,
+        freeItems,
+        quantitySummary,
+        subtotal: subTotal,
+        discountPercentage: discountPercent || 0,
+        total: discounted,
+        remarks,
+      };
+
+      const res = await fetch("/api/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        throw new Error(data.error || "Failed to save bill");
+      }
+
+      toast.success(
+        "Bill saved, stock updated & customer debit adjusted successfully."
+      );
+      setShowConfirm(false);
+
+      // IMPORTANT: We are NOT clearing the form here, so data stays on screen.
+    } catch (err: any) {
+      console.error(err);
+      toast.error(err?.message || "Failed to save bill.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   // ===== PDF Export with consistent formatting on ALL pages =====
   const exportPDF = async () => {
-    // validation (same as you already had)
     if (!billingCustomer || !billingCustomer.name?.trim()) {
       toast.error("Please select a Billing customer before generating PDF.");
       return;
@@ -489,7 +645,6 @@ export default function BillingPage() {
       return;
     }
 
-    // image helper
     const fetchImageAsDataURL = async (url?: string | null) => {
       if (!url) return null;
       try {
@@ -517,13 +672,12 @@ export default function BillingPage() {
     const pageHeight = doc.internal.pageSize.getHeight();
 
     const margin = {
-      top: 190, // header + billing/shipping boxes
+      top: 190,
       bottom: 140,
       left: 40,
       right: 40,
     };
 
-    // where table really starts on every page
     const tableTop = margin.top + 18;
 
     const drawHeader = (pageNumber: number, totalPages: number) => {
@@ -641,7 +795,6 @@ export default function BillingPage() {
       y2 += 12;
       doc.text(`Contact: ${shipContact}`, sx, y2);
 
-      // horizontal line just above table (same on ALL pages)
       doc.line(
         margin.left,
         tableTop - 10,
@@ -716,7 +869,6 @@ export default function BillingPage() {
       );
     };
 
-    // table body + totals
     const tableBody = filledItems.map((it, idx) => [
       `${idx + 1}`,
       it.productName,
@@ -764,17 +916,13 @@ export default function BillingPage() {
           },
         ],
       ],
-
-      // IMPORTANT: tableTop used as margin.top so ALL pages align the same
       margin: {
         top: tableTop,
         bottom: margin.bottom,
         left: margin.left,
         right: margin.right,
       },
-
       theme: "grid",
-
       styles: {
         fontSize: 10,
         cellPadding: 6,
@@ -783,7 +931,6 @@ export default function BillingPage() {
         lineColor: [0, 0, 0],
         lineWidth: 0.7,
       },
-
       headStyles: {
         fillColor: [240, 240, 240],
         textColor: [0, 0, 0],
@@ -791,12 +938,10 @@ export default function BillingPage() {
         lineColor: [0, 0, 0],
         lineWidth: 0.7,
       },
-
       bodyStyles: {
         lineColor: [0, 0, 0],
         lineWidth: 0.7,
       },
-
       footStyles: {
         fillColor: [255, 255, 255],
         textColor: [0, 0, 0],
@@ -804,9 +949,7 @@ export default function BillingPage() {
         lineColor: [0, 0, 0],
         lineWidth: 0.7,
       },
-
       columnStyles: { 1: { halign: "left" } },
-
       didDrawPage: () => {
         const pageInfo = (doc.internal as any).getCurrentPageInfo();
         drawHeader(
@@ -1102,9 +1245,7 @@ export default function BillingPage() {
                         <input
                           type="checkbox"
                           checked={it.free}
-                          onChange={(e) =>
-                            toggleFree(idx, e.target.checked)
-                          }
+                          onChange={(e) => toggleFree(idx, e.target.checked)}
                         />
                       </td>
                     </tr>
@@ -1112,15 +1253,10 @@ export default function BillingPage() {
                 })}
 
                 <tr className="bg-gray-100 font-semibold">
-                  <td
-                    className="border px-2 py-2 text-right"
-                    colSpan={2}
-                  >
+                  <td className="border px-2 py-2 text-right" colSpan={2}>
                     Total Boxes
                   </td>
-                  <td className="border px-2 py-2 text-center">
-                    {totalQty}
-                  </td>
+                  <td className="border px-2 py-2 text-center">{totalQty}</td>
                   <td className="border px-2 py-2"></td>
                   <td className="border px-2 py-2 text-center">
                     {fmt(subTotal)}
@@ -1261,11 +1397,7 @@ export default function BillingPage() {
           {/* ACTIONS */}
           <div className="mt-4 flex items-center justify-end gap-3">
             <button
-              onClick={() =>
-                toast.success(
-                  "Bill prepared (not saved). Use Export PDF to download."
-                )
-              }
+              onClick={handlePrepareBillClick}
               className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
             >
               ✅ Prepare Bill
@@ -1281,6 +1413,38 @@ export default function BillingPage() {
       </main>
 
       <Footer />
+
+      {/* CONFIRM DIALOG */}
+      {showConfirm && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-lg shadow-lg max-w-md w-full p-6">
+            <h2 className="text-lg font-semibold mb-2 text-gray-900">
+              Are you sure you want to save this bill?
+            </h2>
+            <p className="text-sm text-gray-700 mb-4">
+              On clicking <strong>OK</strong>, this bill will be saved,
+              product stock will be reduced according to the quantities in this
+              bill, and the total will be added to this customer&apos;s debit.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowConfirm(false)}
+                className="px-4 py-2 rounded border border-gray-300 text-gray-700"
+                disabled={isSaving}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmSaveBill}
+                disabled={isSaving}
+                className="px-4 py-2 rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-60"
+              >
+                {isSaving ? "Saving..." : "OK"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
