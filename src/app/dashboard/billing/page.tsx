@@ -198,13 +198,32 @@ export default function BillingPage() {
       .catch(() => {});
 
     // --- Set Serial & Date ---
-    setSerialNo(generateSerial());
+        // --- Set Serial & Date (persist per tab using sessionStorage) ---
+    try {
+      const existingSerial = sessionStorage.getItem("billing-serial");
+
+      if (existingSerial) {
+        // If we already generated a serial in this tab, reuse it
+        setSerialNo(existingSerial);
+      } else {
+        // First time in this tab: generate and store
+        const newSerial = generateSerial();
+        setSerialNo(newSerial);
+        sessionStorage.setItem("billing-serial", newSerial);
+      }
+    } catch {
+      // Fallback if sessionStorage is not available for some reason
+      const newSerial = generateSerial();
+      setSerialNo(newSerial);
+    }
+
     const now = new Date();
     const formatted = `${String(now.getDate()).padStart(
       2,
       "0"
     )}-${String(now.getMonth() + 1).padStart(2, "0")}-${now.getFullYear()}`;
     setDate(formatted);
+
   }, []);
 
   // --- Fetch Bank based on seller._id (or fallback from seller doc) ---
