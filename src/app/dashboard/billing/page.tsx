@@ -1,6 +1,6 @@
 // src/app/dashboard/billing/page.tsx
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import DashboardNavbar from "@/app/components/DashboardNavbar";
 import Footer from "@/app/components/Footer";
 import toast from "react-hot-toast";
@@ -30,6 +30,9 @@ type Product = {
   stockQty?: number;
   availableQty?: number;
   quantityInStock?: number;
+
+  // actual DB quantity field
+  quantity?: number;
 };
 
 type SellerDetails = {
@@ -126,6 +129,10 @@ export default function BillingPage() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
+  // refs for keyboard navigation (product -> quantity -> next product)
+  const productRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const quantityRefs = useRef<(HTMLInputElement | null)[]>([]);
+
   // ===== Helpers =====
   const safeJson = async (res: Response) => {
     try {
@@ -143,8 +150,50 @@ export default function BillingPage() {
     let last = Number(localStorage.getItem(key) || "0");
     last = last + 1;
     if (last > 9999) last = 1;
-    localStorage.setItem(key, String(last).padStart(4, "0"));
-    return `${month}${String(last).padStart(4, "0")}`;
+    const padded = String(last).padStart(4, "0");
+    localStorage.setItem(key, padded);
+    return `${month}${padded}`;
+  };
+
+  const updateDateToToday = () => {
+    const now = new Date();
+    const formatted = `${String(now.getDate()).padStart(
+      2,
+      "0"
+    )}-${String(now.getMonth() + 1).padStart(2, "0")}-${now.getFullYear()}`;
+    setDate(formatted);
+  };
+
+  const resetBillForm = () => {
+    // reset all fields after saving
+    setBillingCustomer(null);
+    setShippingCustomer(null);
+    setSameAsBilling(false);
+    setCustomerInput("");
+    setItems(Array.from({ length: 15 }, blankItem));
+    setDiscountPercent(0);
+    setRemarks("");
+
+    const newSerial = generateSerial();
+    setSerialNo(newSerial);
+    updateDateToToday();
+    try {
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem("billing-serial", newSerial);
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  const focusQuantity = (index: number) => {
+    const el = quantityRefs.current[index];
+    if (el) el.focus();
+  };
+
+  const focusProduct = (index: number) => {
+    const el = productRefs.current[index];
+    if (el) el.focus();
   };
 
   // ===== Load Data =====
@@ -218,7 +267,6 @@ export default function BillingPage() {
     // --- Set Serial & Date (persist per tab using sessionStorage) ---
     try {
       const existingSerial = sessionStorage.getItem("billing-serial");
-
       if (existingSerial) {
         setSerialNo(existingSerial);
       } else {
@@ -231,12 +279,7 @@ export default function BillingPage() {
       setSerialNo(newSerial);
     }
 
-    const now = new Date();
-    const formatted = `${String(now.getDate()).padStart(
-      2,
-      "0"
-    )}-${String(now.getMonth() + 1).padStart(2, "0")}-${now.getFullYear()}`;
-    setDate(formatted);
+    updateDateToToday();
   }, []);
 
   // --- Fetch Bank based on seller._id (or fallback from seller doc) ---
@@ -318,7 +361,8 @@ export default function BillingPage() {
       anyP.stock ??
       anyP.stockQty ??
       anyP.availableQty ??
-      anyP.quantityInStock;
+      anyP.quantityInStock ??
+      anyP.quantity; // ✅ include actual DB quantity
     return typeof stock === "number" && !isNaN(stock) ? stock : undefined;
   };
 
@@ -409,7 +453,14 @@ export default function BillingPage() {
 
   const discounted = subTotal - (subTotal * (discountPercent || 0)) / 100;
 
-  // customer suggestion handlers
+  // For line-wise product entry: determine first empty row
+  const firstEmptyIndex = items.findIndex(
+    (it) => !it.productName || !it.productName.trim()
+  );
+  const isRowEditable = (idx: number) =>
+    firstEmptyIndex === -1 || idx <= firstEmptyIndex;
+
+  // customer suggestion handlers (use SHOP NAME for search & suggestions)
   const onCustomerInputChange = (val: string) => {
     setCustomerInput(val);
     const cleaned = val.trim().toLowerCase();
@@ -417,17 +468,18 @@ export default function BillingPage() {
       setBillingCustomer(null);
       return;
     }
-    const exact = customers.find(
-      (c) => c.name?.trim().toLowerCase() === cleaned
-    );
+
+    const getKey = (c: Customer) =>
+      (c.shopName || c.name || "").trim().toLowerCase();
+
+    const exact = customers.find((c) => getKey(c) === cleaned);
     if (exact) {
       setBillingCustomer(exact);
       if (sameAsBilling) setShippingCustomer(exact);
       return;
     }
-    const partial = customers.filter((c) =>
-      c.name?.toLowerCase().includes(cleaned)
-    );
+
+    const partial = customers.filter((c) => getKey(c).includes(cleaned));
     if (partial.length === 1) {
       setBillingCustomer(partial[0]);
       if (sameAsBilling) setShippingCustomer(partial[0]);
@@ -442,7 +494,9 @@ export default function BillingPage() {
       toast.error("Please select a Billing customer before saving bill.");
       return false;
     }
-    if (!billingCustomer.address?.trim()) {
+    const addr =
+      billingCustomer.address || billingCustomer.shopAddress || "";
+    if (!addr.trim()) {
       toast.error("Billing address is required.");
       return false;
     }
@@ -573,7 +627,13 @@ export default function BillingPage() {
       );
       setShowConfirm(false);
 
-      // IMPORTANT: We are NOT clearing the form here, so data stays on screen.
+      // ✅ Clear everything and increment serial number
+      resetBillForm();
+
+      // 🔄 Refresh page to fetch updated product quantities
+      if (typeof window !== "undefined") {
+        window.location.reload();
+      }
     } catch (err: any) {
       console.error(err);
       toast.error(err?.message || "Failed to save bill.");
@@ -588,7 +648,9 @@ export default function BillingPage() {
       toast.error("Please select a Billing customer before generating PDF.");
       return;
     }
-    if (!billingCustomer.address?.trim()) {
+    const billAddr =
+      billingCustomer.address || billingCustomer.shopAddress || "";
+    if (!billAddr.trim()) {
       toast.error("Billing address is required to generate PDF.");
       return;
     }
@@ -597,8 +659,8 @@ export default function BillingPage() {
       ? billingCustomer.name
       : shippingCustomer?.name;
     const shAddress = sameAsBilling
-      ? billingCustomer.address
-      : shippingCustomer?.address;
+      ? billAddr
+      : shippingCustomer?.address || shippingCustomer?.shopAddress;
 
     if (!shName?.trim() || !shAddress?.trim()) {
       toast.error("Shipping customer name and address are required.");
@@ -767,21 +829,25 @@ export default function BillingPage() {
 
       doc.setFont("helvetica", "normal").setFontSize(9);
 
+      const billShop = billingCustomer?.shopName || "-";
       const billName = billingCustomer?.name || "-";
-      const billAddr = billingCustomer?.address || "-";
+      const billAddr =
+        billingCustomer?.address || billingCustomer?.shopAddress || "-";
       const billContact = billingCustomer?.contact || "-";
 
       const shipName = sameAsBilling ? billName : shippingCustomer?.name || "-";
       const shipAddr = sameAsBilling
         ? billAddr
-        : shippingCustomer?.address || "-";
+        : shippingCustomer?.address || shippingCustomer?.shopAddress || "-";
       const shipContact = sameAsBilling
         ? billContact
         : shippingCustomer?.contact || "-";
 
       let y = boxTop + 28;
 
-      doc.text(`Name: ${billName}`, margin.left + 6, y);
+      doc.text(`Shop: ${billShop}`, margin.left + 6, y);
+      y += 12;
+      doc.text(`Customer: ${billName}`, margin.left + 6, y);
       y += 12;
       doc.text(`Address: ${billAddr}`, margin.left + 6, y);
       y += 12;
@@ -789,7 +855,7 @@ export default function BillingPage() {
 
       let y2 = boxTop + 28;
       const sx = margin.left + boxWidth + gap + 6;
-      doc.text(`Name: ${shipName}`, sx, y2);
+      doc.text(`Customer: ${shipName}`, sx, y2);
       y2 += 12;
       doc.text(`Address: ${shipAddr}`, sx, y2);
       y2 += 12;
@@ -1042,7 +1108,7 @@ export default function BillingPage() {
                   list="customer-suggestions"
                   value={customerInput}
                   onChange={(e) => onCustomerInputChange(e.target.value)}
-                  placeholder="Type or pick a customer name..."
+                  placeholder="Type or pick a shop name..."
                   className="w-full border p-2 rounded text-gray-900"
                 />
                 <button
@@ -1057,20 +1123,38 @@ export default function BillingPage() {
               </div>
 
               <datalist id="customer-suggestions">
-                {customers.map((c) => (
-                  <option key={c._id} value={c.name} />
-                ))}
+                {customers.map((c) => {
+                  const label =
+                    c.shopName && c.name
+                      ? `${c.shopName} - ${c.name}`
+                      : c.shopName || c.name;
+                  return (
+                    <option
+                      key={c._id}
+                      value={c.shopName || c.name}
+                      label={label || undefined}
+                    />
+                  );
+                })}
               </datalist>
 
               <div className="mt-2 text-sm text-gray-800">
                 <div>
-                  <strong>Name:</strong> {billingCustomer?.name || "-"}
+                  <strong>Shop Name:</strong>{" "}
+                  {billingCustomer?.shopName || "-"}
                 </div>
                 <div>
-                  <strong>Address:</strong> {billingCustomer?.address || "-"}
+                  <strong>Customer Name:</strong>{" "}
+                  {billingCustomer?.name || "-"}
                 </div>
                 <div>
                   <strong>Contact:</strong> {billingCustomer?.contact || "-"}
+                </div>
+                <div>
+                  <strong>Address:</strong>{" "}
+                  {billingCustomer?.address ||
+                    billingCustomer?.shopAddress ||
+                    "-"}
                 </div>
               </div>
             </div>
@@ -1095,9 +1179,13 @@ export default function BillingPage() {
                   onBlur={(e) => {
                     const val = e.currentTarget.value.trim().toLowerCase();
                     if (!val) return;
-                    const match = customers.find(
-                      (c) => c.name?.trim().toLowerCase() === val
-                    );
+                    const match = customers.find((c) => {
+                      const key =
+                        (c.shopName || c.name || "")
+                          .trim()
+                          .toLowerCase();
+                      return key === val;
+                    });
                     if (match) setShippingCustomer(match);
                   }}
                 />
@@ -1105,22 +1193,32 @@ export default function BillingPage() {
 
               <div className="mt-2 text-sm text-gray-800">
                 <div>
-                  <strong>Name:</strong>{" "}
+                  <strong>Shop Name:</strong>{" "}
+                  {sameAsBilling
+                    ? billingCustomer?.shopName || "-"
+                    : shippingCustomer?.shopName || "-"}
+                </div>
+                <div>
+                  <strong>Customer Name:</strong>{" "}
                   {sameAsBilling
                     ? billingCustomer?.name || "-"
                     : shippingCustomer?.name || "-"}
-                </div>
-                <div>
-                  <strong>Address:</strong>{" "}
-                  {sameAsBilling
-                    ? billingCustomer?.address || "-"
-                    : shippingCustomer?.address || "-"}
                 </div>
                 <div>
                   <strong>Contact:</strong>{" "}
                   {sameAsBilling
                     ? billingCustomer?.contact || "-"
                     : shippingCustomer?.contact || "-"}
+                </div>
+                <div>
+                  <strong>Address:</strong>{" "}
+                  {sameAsBilling
+                    ? billingCustomer?.address ||
+                      billingCustomer?.shopAddress ||
+                      "-"
+                    : shippingCustomer?.address ||
+                      shippingCustomer?.shopAddress ||
+                      "-"}
                 </div>
               </div>
             </div>
@@ -1153,6 +1251,7 @@ export default function BillingPage() {
                 {items.map((it, idx) => {
                   const matched = findProductByName(it.productName);
                   const stock = getProductStock(matched);
+                  const editable = isRowEditable(idx);
 
                   return (
                     <tr
@@ -1163,16 +1262,44 @@ export default function BillingPage() {
                         {idx + 1}
                       </td>
 
+                      {/* PRODUCT INPUT */}
                       <td className="border px-2 py-1 align-top">
                         <input
                           suppressHydrationWarning
                           list="product-suggestions"
                           value={it.productName}
-                          onChange={(e) =>
+                          disabled={!editable}
+                          ref={(el) => {
+                            productRefs.current[idx] = el;
+                          }}
+                          onChange={(e) => {
+                            const value = e.target.value;
                             updateItem(idx, {
-                              productName: e.target.value,
-                            })
-                          }
+                              productName: value,
+                            });
+
+                            // ✅ As soon as a real product is selected/typed, jump to quantity
+                            if (editable) {
+                              const m = findProductByName(value);
+                              if (m) {
+                                setTimeout(() => {
+                                  focusQuantity(idx);
+                                }, 0);
+                              }
+                            }
+                          }}
+                          onKeyDown={(e) => {
+                            if (!editable) return;
+                            if (e.key === "Enter") {
+                              const value = (
+                                e.target as HTMLInputElement
+                              ).value.trim();
+                              if (value) {
+                                e.preventDefault();
+                                focusQuantity(idx);
+                              }
+                            }
+                          }}
                           className="w-full border rounded px-2 py-1 text-gray-900"
                           placeholder="Start typing product..."
                         />
@@ -1185,23 +1312,65 @@ export default function BillingPage() {
                         )}
                       </td>
 
+                      {/* QUANTITY INPUT */}
                       <td className="border px-2 py-1 text-center align-top">
-                        <input
-                          suppressHydrationWarning
-                          type="number"
-                          min={0}
-                          step="any"
-                          value={it.quantity === 0 ? "" : it.quantity}
-                          onChange={(e) =>
-                            updateItem(idx, {
-                              quantity: Number(e.target.value || 0),
-                            })
-                          }
-                          className="w-20 border rounded px-2 py-1 text-center text-gray-900"
-                          placeholder="0"
-                        />
+                        <div className="flex flex-col items-center">
+                          <input
+                            suppressHydrationWarning
+                            type="number"
+                            min={0}
+                            step="any"
+                            disabled={!editable}
+                            ref={(el) => {
+                              quantityRefs.current[idx] = el;
+                            }}
+                            value={it.quantity === 0 ? "" : it.quantity}
+                            onChange={(e) =>
+                              updateItem(idx, {
+                                quantity: Number(e.target.value || 0),
+                              })
+                            }
+                            onFocus={(e) => {
+                              if (
+                                editable &&
+                                (!it.productName ||
+                                  !it.productName.trim())
+                              ) {
+                                // force product first
+                                e.target.blur();
+                                toast.error(
+                                  "Please select product name first for this line."
+                                );
+                                focusProduct(idx);
+                              }
+                            }}
+                            onKeyDown={(e) => {
+                              if (!editable) return;
+                              // move to next product when Tab in quantity
+                              if (e.key === "Tab" && !e.shiftKey) {
+                                e.preventDefault();
+                                const nextIndex = idx + 1;
+                                if (nextIndex < items.length) {
+                                  focusProduct(nextIndex);
+                                }
+                              }
+                            }}
+                            className="w-20 border rounded px-2 py-1 text-center text-gray-900"
+                            placeholder="0"
+                          />
+                          {matched && typeof stock === "number" && (
+                            <span className="mt-1 text-[10px] text-gray-500">
+                              Currently in stock:{" "}
+                              <span className="font-semibold">
+                                {stock}
+                              </span>{" "}
+                              {matched.unit || "units"}
+                            </span>
+                          )}
+                        </div>
                       </td>
 
+                      {/* PRICE */}
                       <td className="border px-2 py-1 text-center align-top">
                         {it.free ? (
                           <span className="font-semibold text-red-600">
@@ -1214,6 +1383,7 @@ export default function BillingPage() {
                               type="number"
                               min={0}
                               step="any"
+                              disabled={!editable}
                               value={it.price || ""}
                               onChange={(e) =>
                                 updateItem(idx, {
@@ -1231,6 +1401,7 @@ export default function BillingPage() {
                         )}
                       </td>
 
+                      {/* TOTAL */}
                       <td className="border px-2 py-1 text-center align-top">
                         {it.free ? (
                           <span className="font-semibold text-red-600">
@@ -1241,11 +1412,15 @@ export default function BillingPage() {
                         )}
                       </td>
 
+                      {/* FREE CHECKBOX */}
                       <td className="border px-2 py-1 text-center align-top">
                         <input
                           type="checkbox"
+                          disabled={!editable}
                           checked={it.free}
-                          onChange={(e) => toggleFree(idx, e.target.checked)}
+                          onChange={(e) =>
+                            toggleFree(idx, e.target.checked)
+                          }
                         />
                       </td>
                     </tr>
@@ -1287,7 +1462,8 @@ export default function BillingPage() {
               </button>
               <p className="text-xs text-gray-500">
                 Selecting a suggested product will auto-fill price/unit (you can
-                still edit manually). Quantity is limited to available stock.
+                still edit manually). Quantity is limited to available stock and
+                you must fill products line by line (no skipping rows).
               </p>
             </div>
           </div>
@@ -1422,9 +1598,10 @@ export default function BillingPage() {
               Are you sure you want to save this bill?
             </h2>
             <p className="text-sm text-gray-700 mb-4">
-              On clicking <strong>OK</strong>, this bill will be saved,
-              product stock will be reduced according to the quantities in this
-              bill, and the total will be added to this customer&apos;s debit.
+              On clicking <strong>OK</strong>, this bill will be saved, product
+              stock will be reduced according to the quantities in this bill,
+              and the total will be added to this customer&apos;s debit. After
+              saving, the form will reset and the serial number will increment.
             </p>
             <div className="flex justify-end gap-3">
               <button
