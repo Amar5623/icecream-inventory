@@ -82,6 +82,12 @@ export default function CustomersPage() {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
+  // NEW: settlement modal state
+  const [settlementCustomer, setSettlementCustomer] = useState<Customer | null>(
+    null
+  );
+  const [settling, setSettling] = useState(false);
+
   // load user id
   useEffect(() => {
     const stored = localStorage.getItem("user");
@@ -304,6 +310,96 @@ export default function CustomersPage() {
     }
   };
 
+  // NEW: open settlement modal (with toast if no credit)
+  const openSettlementModal = (c: Customer) => {
+    const credit = Number(c.credit ?? 0);
+
+  if (!credit || credit <= 0) {
+    toast.error("There is no credited amount for this customer.");
+    return;
+  }
+
+    setSettlementCustomer(c);
+  };
+
+  const closeSettlementModal = () => {
+    setSettlementCustomer(null);
+  };
+
+  // NEW: confirm settlement inside modal
+  const confirmSettlement = async () => {
+    if (!userId || !settlementCustomer) {
+      toast.error("Missing customer info");
+      return;
+    }
+
+    const c = settlementCustomer;
+    const credit = Number(c.credit ?? 0);
+    const debit = Number(c.debit ?? 0);
+
+    if (!Number.isFinite(credit) || credit <= 0) {
+      toast.error("This customer has no credit to settle.");
+      return;
+    }
+    if (!Number.isFinite(debit) || debit <= 0) {
+      toast.error("This customer has no debit amount.");
+      return;
+    }
+
+    // use as much credit as possible (don't make debit negative)
+    const usedCredit = Math.min(credit, debit);
+    const newDebit = debit - usedCredit;
+    const newCredit = credit - usedCredit;
+
+    try {
+      setSettling(true);
+
+      const body: any = {
+        id: c._id,
+        userId,
+        name: c.name,
+        contacts: c.contacts,
+        shopName: c.shopName,
+        shopAddress: c.shopAddress,
+        location: c.location || {},
+        remarks: c.remarks || "",
+        credit: newCredit,
+        debit: newDebit,
+        totalSales: c.totalSales ?? 0,
+      };
+
+      const res = await fetch("/api/customers", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.error || "Settlement update failed");
+      }
+
+      const updated = await res.json();
+
+      setCustomers((prev) =>
+        prev.map((cust) => (cust._id === updated._id ? updated : cust))
+      );
+
+      toast.success(
+        `Settlement done. Debit reduced by ₹${usedCredit.toFixed(
+          2
+        )}. New debit: ₹${newDebit.toFixed(2)}`
+      );
+
+      closeSettlementModal();
+    } catch (err: any) {
+      console.error(err);
+      toast.error(err?.message || "Failed to settle credit against debit");
+    } finally {
+      setSettling(false);
+    }
+  };
+
   // search + sort
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -447,9 +543,7 @@ export default function CustomersPage() {
               <input
                 className={inputBase + " text-lg"}
                 value={form.name}
-                onChange={(e) =>
-                  setForm({ ...form, name: e.target.value })
-                }
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
                 placeholder="e.g. Ramesh & Sons"
                 required
               />
@@ -804,7 +898,7 @@ export default function CustomersPage() {
                         {c.remarks || "-"}
                       </td>
                       <td className="p-3 align-top text-sm text-gray-700">
-                        <div className="flex gap-2">
+                        <div className="flex flex-wrap gap-2">
                           <button
                             onClick={() => handleView(c)}
                             className="inline-flex items-center gap-2 px-3 py-1 rounded bg-blue-50 text-blue-700 hover:bg-blue-100"
@@ -819,6 +913,15 @@ export default function CustomersPage() {
                             title="Edit"
                           >
                             <Edit3 size={16} /> Edit
+                          </button>
+
+                          {/* Settlement button */}
+                          <button
+                            onClick={() => openSettlementModal(c)}
+                            className="inline-flex items-center gap-2 px-3 py-1 rounded bg-green-50 text-green-700 hover:bg-green-100"
+                            title="Settle credit vs debit"
+                          >
+                            Settle
                           </button>
 
                           <button
@@ -841,26 +944,82 @@ export default function CustomersPage() {
 
       <Footer />
 
-      {/* VIEW Modal */}
+      {/* VIEW Modal with same blur bg */}
       {viewingCustomer && (
-        <CustomerViewModal
-          customer={viewingCustomer}
-          onClose={() => setViewingCustomer(null)}
-          onEdit={(c) => {
-            setViewingCustomer(null);
-            handleEdit(c);
-          }}
-          onDelete={(id) => {
-            setViewingCustomer(null);
-            openDeleteModal(id);
-          }}
-        />
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/10 backdrop-blur-sm px-4">
+          <CustomerViewModal
+            customer={viewingCustomer}
+            onClose={() => setViewingCustomer(null)}
+            onEdit={(c) => {
+              setViewingCustomer(null);
+              handleEdit(c);
+            }}
+            onDelete={(id) => {
+              setViewingCustomer(null);
+              openDeleteModal(id);
+            }}
+          />
+        </div>
+      )}
+
+      {/* Settlement Modal */}
+      {settlementCustomer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/10 backdrop-blur-sm px-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
+            <h3 className="text-lg font-semibold text-gray-800 mb-2">
+              Settle credit against debit
+            </h3>
+            <p className="text-sm text-gray-600 mb-3">
+              Customer:{" "}
+              <span className="font-semibold">
+                {settlementCustomer.name} ({settlementCustomer.shopName})
+              </span>
+            </p>
+            <p className="text-sm text-gray-700 mb-2">
+              Current Credit:{" "}
+              <span className="font-semibold text-green-700">
+                ₹{(settlementCustomer.credit || 0).toFixed(2)}
+              </span>
+            </p>
+            <p className="text-sm text-gray-700 mb-4">
+              Current Debit:{" "}
+              <span className="font-semibold text-red-700">
+                ₹{(settlementCustomer.debit || 0).toFixed(2)}
+              </span>
+            </p>
+
+            <p className="text-sm text-gray-600 mb-4">
+              On confirming, the customer&apos;s{" "}
+              <strong>total credit amount</strong> will be used to reduce the
+              debit (up to the debit amount). Are you sure you want to proceed?
+            </p>
+
+            <div className="mt-4 flex justify-end gap-3">
+              <button
+                onClick={closeSettlementModal}
+                className="px-4 py-2 rounded border text-gray-700 hover:bg-gray-50 text-sm"
+                disabled={settling}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmSettlement}
+                disabled={settling}
+                className={`px-4 py-2 rounded bg-green-600 text-white text-sm ${
+                  settling ? "opacity-70" : "hover:bg-green-700"
+                }`}
+              >
+                {settling ? "Settling..." : "Confirm"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Delete Modal */}
       {deleteId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 px-4">
-          <div className="bg.white rounded-lg shadow-xl w-full max-w-md p-6">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/10 backdrop-blur-sm px-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
             <h3 className="text-lg font-semibold text-gray-800">
               Delete customer?
             </h3>

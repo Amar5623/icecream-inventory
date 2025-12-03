@@ -56,7 +56,7 @@ export default function CustomerViewModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 px-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/10 backdrop-blur-sm px-4"
       onClick={onClose}
     >
       <div
@@ -79,13 +79,16 @@ export default function CustomerViewModal({
           </div>
 
           <div className="flex-1">
-            <h3 className="text-2xl font-bold text-gray-900">{customer.name}</h3>
+            <h3 className="text-2xl font-bold text-gray-900">
+              {customer.name}
+            </h3>
             <p className="text-sm text-gray-500 mt-1">{customer.shopName}</p>
           </div>
         </div>
 
         {/* Details */}
         <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Contacts */}
           <div className="bg-gray-50 rounded-lg p-4 shadow-sm">
             <div className="text-xs text-gray-600">Primary Contact</div>
             <div className="text-lg font-medium text-gray-800">
@@ -103,6 +106,7 @@ export default function CustomerViewModal({
             )}
           </div>
 
+          {/* Address + Location */}
           <div className="bg-gray-50 rounded-lg p-4 shadow-sm">
             <div className="text-xs text-gray-600">Shop Address</div>
             <div className="text-sm text-gray-800">{customer.shopAddress}</div>
@@ -128,6 +132,7 @@ export default function CustomerViewModal({
             </div>
           </div>
 
+          {/* Credit */}
           <div className="bg-gray-50 rounded-lg p-4 shadow-sm">
             <div className="text-xs text-gray-600">Credit</div>
             <div className="text-lg font-medium text-gray-800">
@@ -135,6 +140,7 @@ export default function CustomerViewModal({
             </div>
           </div>
 
+          {/* Debit */}
           <div className="bg-gray-50 rounded-lg p-4 shadow-sm">
             <div className="text-xs text-gray-600">Debit</div>
             <div className="text-lg font-medium text-gray-800">
@@ -142,6 +148,7 @@ export default function CustomerViewModal({
             </div>
           </div>
 
+          {/* Total Sales */}
           <div className="bg-gray-50 rounded-lg p-4 shadow-sm">
             <div className="text-xs text-gray-600">Total Sales</div>
             <div className="text-lg font-medium text-gray-800">
@@ -149,6 +156,7 @@ export default function CustomerViewModal({
             </div>
           </div>
 
+          {/* Remarks */}
           <div className="md:col-span-2 bg-gray-50 rounded-lg p-4 shadow-sm">
             <div className="text-xs text-gray-600">Remarks</div>
             <div className="text-sm text-gray-800">

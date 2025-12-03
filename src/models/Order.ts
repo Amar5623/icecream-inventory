@@ -26,6 +26,17 @@ export interface IQuantitySummary {
 
 export type OrderStatus = "Unsettled" | "settled";
 
+export type SettlementMethod = "Cash" | "Bank/UPI" | "Debt";
+export type SettlementAction = "Created" | "Discarded" | "Settled";
+
+export interface IOrderSettlementHistoryEntry {
+  action: SettlementAction;          // Created, Discarded, Settled
+  method?: SettlementMethod;        // Cash / Bank/UPI / Debt (for Settled)
+  amountPaid?: number;              // payment amount for that action
+  note?: string;                    // optional note
+  at: Date;                         // timestamp of the action
+}
+
 export interface IOrder extends Document {
   userId: string;          // link with User (shop owner)
   orderId: string;         // ORDER UNIQUE ID (your custom unique ID)
@@ -35,6 +46,7 @@ export interface IOrder extends Document {
   customerName: string;    // CUSTOMER NAME
   customerAddress: string; // CUSTOMER ADDRESS
   customerContact: string; // CUSTOMER CONTACT
+  customerId?: string;     // link to Customer document (for debit/credit)
 
   items: IOrderItem[];     // PARTICULARS -> PRODUCT NAME, QUANTITY, UNIT
   freeItems: IFreeItem[];  // PRODUCTS WHICH ARE FREE WITH QUANTITY AND NAME
@@ -45,7 +57,14 @@ export interface IOrder extends Document {
   discountPercentage: number;  // DISCOUNT PERCENTAGE
   total: number;               // TOTAL
 
-  status: OrderStatus;         // ORDER STATUS (unsettled / settled)
+  status: OrderStatus;         // ORDER STATUS (Unsettled / settled)
+
+  // settlement + discard tracking
+  settlementMethod?: SettlementMethod | null; // how it was settled
+  settlementAmount?: number;                  // amount paid on settlement
+  settledAt?: Date | null;                    // when it was settled
+  discardedAt?: Date | null;                  // when it was discarded
+  settlementHistory?: IOrderSettlementHistoryEntry[];
 
   remarks?: string;            // REMARKS
 
@@ -93,6 +112,25 @@ const QuantitySummarySchema = new Schema<IQuantitySummary>(
   { _id: false }
 );
 
+const SettlementHistoryEntrySchema = new Schema<IOrderSettlementHistoryEntry>(
+  {
+    action: {
+      type: String,
+      enum: ["Created", "Discarded", "Settled"],
+      required: true,
+    },
+    method: {
+      type: String,
+      enum: ["Cash", "Bank/UPI", "Debt"],
+      default: undefined,
+    },
+    amountPaid: { type: Number, default: 0 },
+    note: { type: String, default: "" },
+    at: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
 const OrderSchema = new Schema<IOrder>(
   {
     userId: { type: String, required: true }, // shop owner / admin
@@ -104,6 +142,7 @@ const OrderSchema = new Schema<IOrder>(
     customerName: { type: String, required: true },
     customerAddress: { type: String, required: true },
     customerContact: { type: String, required: true },
+    customerId: { type: String },
 
     items: { type: [OrderItemSchema], required: true },
     freeItems: { type: [FreeItemSchema], default: [] },
@@ -123,6 +162,20 @@ const OrderSchema = new Schema<IOrder>(
       enum: ["Unsettled", "settled"],
       required: true,
       default: "Unsettled",
+    },
+
+    settlementMethod: {
+      type: String,
+      enum: ["Cash", "Bank/UPI", "Debt"],
+      default: null,
+    },
+    settlementAmount: { type: Number, default: 0 },
+    settledAt: { type: Date, default: null },
+    discardedAt: { type: Date, default: null },
+
+    settlementHistory: {
+      type: [SettlementHistoryEntrySchema],
+      default: [],
     },
 
     remarks: { type: String, default: "" },

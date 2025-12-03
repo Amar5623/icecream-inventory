@@ -835,6 +835,7 @@ export default function BillingPage() {
         billingCustomer?.address || billingCustomer?.shopAddress || "-";
       const billContact = billingCustomer?.contact || "-";
 
+      const shipShop = sameAsBilling ? billShop : shippingCustomer?.shopName || "-";
       const shipName = sameAsBilling ? billName : shippingCustomer?.name || "-";
       const shipAddr = sameAsBilling
         ? billAddr
@@ -855,6 +856,8 @@ export default function BillingPage() {
 
       let y2 = boxTop + 28;
       const sx = margin.left + boxWidth + gap + 6;
+      doc.text(`Shop: ${shipShop}`, sx, y2);
+      y2 += 12;
       doc.text(`Customer: ${shipName}`, sx, y2);
       y2 += 12;
       doc.text(`Address: ${shipAddr}`, sx, y2);
