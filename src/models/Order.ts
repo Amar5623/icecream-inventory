@@ -24,6 +24,8 @@ export interface IQuantitySummary {
   ml: number;
 }
 
+export type OrderStatus = "Unsettled" | "settled";
+
 export interface IOrder extends Document {
   userId: string;          // link with User (shop owner)
   orderId: string;         // ORDER UNIQUE ID (your custom unique ID)
@@ -42,6 +44,8 @@ export interface IOrder extends Document {
   subtotal: number;            // SUBTOTAL
   discountPercentage: number;  // DISCOUNT PERCENTAGE
   total: number;               // TOTAL
+
+  status: OrderStatus;         // ORDER STATUS (unsettled / settled)
 
   remarks?: string;            // REMARKS
 
@@ -113,6 +117,13 @@ const OrderSchema = new Schema<IOrder>(
     subtotal: { type: Number, required: true, min: 0 },
     discountPercentage: { type: Number, required: true, min: 0, default: 0 },
     total: { type: Number, required: true, min: 0 },
+
+    status: {
+      type: String,
+      enum: ["Unsettled", "settled"],
+      required: true,
+      default: "Unsettled",
+    },
 
     remarks: { type: String, default: "" },
   },
