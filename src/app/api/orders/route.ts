@@ -1,11 +1,10 @@
-// src/app/api/orders/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/lib/mongodb";
 import Order from "@/models/Order";
 import Product from "@/models/Product";
 import Customer from "@/models/Customer";
 
-// CREATE ORDER (existing logic, plus status + history entry)
+// CREATE ORDER
 export async function POST(req: NextRequest) {
   await connectDB();
 
@@ -152,18 +151,18 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// PATCH: discard / settle
+// PATCH: discard / settle / settleDebt
 export async function PATCH(req: NextRequest) {
   await connectDB();
 
   try {
     const body = await req.json();
     const {
-      action, // 'discard' | 'settle'
+      action, // 'discard' | 'settle' | 'settleDebt'
       orderId, // Mongo _id of order
       userId,
-      method, // 'Cash' | 'Bank/UPI' | 'Debt'  (for settle)
-      amount, // number (for settle)
+      method, // 'Cash' | 'Bank/UPI' | 'Debt'
+      amount, // number
     } = body;
 
     if (!orderId || !userId || !action) {
@@ -173,18 +172,22 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
-    const order = await Order.findOne({ _id: orderId, userId });
+    const order: any = await Order.findOne({ _id: orderId, userId });
 
     if (!order) {
       return NextResponse.json({ error: "Order not found." }, { status: 404 });
     }
 
-    if (order.status !== "Unsettled") {
+    // For normal discard/settle we only allow Unsettled orders.
+    // For 'settleDebt' we intentionally allow already-settled Debt orders.
+    if (action !== "settleDebt" && order.status !== "Unsettled") {
       return NextResponse.json(
         { error: "Only Unsettled orders can be modified." },
         { status: 400 }
       );
     }
+
+    const billTotal = Number(order.total || 0);
 
     // Helper for customer updates
     const adjustCustomerForDiscard = async () => {
@@ -222,6 +225,7 @@ export async function PATCH(req: NextRequest) {
       });
     };
 
+    // ===== DISCARD =====
     if (action === "discard") {
       // 1) revert stock
       const allItems = [
@@ -270,6 +274,7 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ success: true, order }, { status: 200 });
     }
 
+    // ===== FIRST-TIME SETTLE FROM UNSETTLED TAB =====
     if (action === "settle") {
       if (method !== "Cash" && method !== "Bank/UPI" && method !== "Debt") {
         return NextResponse.json(
@@ -278,17 +283,101 @@ export async function PATCH(req: NextRequest) {
         );
       }
 
-      const payAmount =
-        method === "Debt" ? 0 : Math.max(0, Number(amount || 0));
+      // Debt -> no payment now, whole amount remains pending
+      if (method === "Debt") {
+        order.status = "settled";
+        order.settlementMethod = "Debt";
+        order.settlementAmount = 0;
+        order.settledAt = new Date();
 
-      // Debt => keep debit as it is
-      if (method === "Cash" || method === "Bank/UPI") {
-        await adjustCustomerForPayment(payAmount);
+        order.settlementHistory = order.settlementHistory || [];
+        order.settlementHistory.push({
+          action: "Settled",
+          method: "Debt",
+          amountPaid: 0,
+          at: new Date(),
+        });
+
+        await order.save();
+
+        return NextResponse.json({ success: true, order }, { status: 200 });
       }
 
+      // Cash / Bank: may be full or partial
+      const payAmount = Math.max(0, Number(amount || 0));
+      if (payAmount <= 0) {
+        return NextResponse.json(
+          { error: "Payment amount must be greater than 0." },
+          { status: 400 }
+        );
+      }
+
+      await adjustCustomerForPayment(payAmount);
+
+      const totalPaid = payAmount;
+      const fullyPaid = totalPaid >= billTotal;
+
       order.status = "settled";
-      order.settlementMethod = method;
-      order.settlementAmount = payAmount;
+      // If fully paid -> Cash/Bank; if partial -> keep as Debt so it stays in Debt tab
+      order.settlementMethod = fullyPaid ? method : "Debt";
+      order.settlementAmount = totalPaid;
+      order.settledAt = new Date();
+
+      order.settlementHistory = order.settlementHistory || [];
+      order.settlementHistory.push({
+        action: "Settled",
+        method, // real payment method
+        amountPaid: payAmount,
+        at: new Date(),
+        note: fullyPaid
+          ? "Fully settled from Unsettled tab"
+          : "Partial payment from Unsettled tab, remaining kept as Debt",
+      });
+
+      await order.save();
+
+      return NextResponse.json({ success: true, order }, { status: 200 });
+    }
+
+    // ===== SETTLE DEBT (FROM DEBT TAB) =====
+    if (action === "settleDebt") {
+      // This should only be allowed for orders previously marked as Debt
+      if (order.settlementMethod !== "Debt") {
+        return NextResponse.json(
+          { error: "Only Debt orders can be settled from the Debt tab." },
+          { status: 400 }
+        );
+      }
+
+      if (method !== "Cash" && method !== "Bank/UPI") {
+        return NextResponse.json(
+          { error: "Invalid settlement method for Debt." },
+          { status: 400 }
+        );
+      }
+
+      const payAmount = Math.max(0, Number(amount || 0));
+      if (!payAmount) {
+        return NextResponse.json(
+          { error: "Payment amount must be greater than 0." },
+          { status: 400 }
+        );
+      }
+
+      // Reduce customer's debit / adjust credit
+      await adjustCustomerForPayment(payAmount);
+
+      const prevPaid =
+        typeof order.settlementAmount === "number"
+          ? order.settlementAmount
+          : 0;
+      const newTotalPaid = prevPaid + payAmount;
+      const fullyPaid = newTotalPaid >= billTotal;
+
+      order.status = "settled"; // stays settled
+      order.settlementAmount = newTotalPaid;
+      // if fully paid, move to Settled tab by changing method away from "Debt"
+      order.settlementMethod = fullyPaid ? method : "Debt";
       order.settledAt = new Date();
 
       order.settlementHistory = order.settlementHistory || [];
@@ -297,6 +386,9 @@ export async function PATCH(req: NextRequest) {
         method,
         amountPaid: payAmount,
         at: new Date(),
+        note: fullyPaid
+          ? "Debt fully settled"
+          : "Partial payment recorded, still Debt",
       });
 
       await order.save();
@@ -304,6 +396,7 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ success: true, order }, { status: 200 });
     }
 
+    // ===== INVALID ACTION =====
     return NextResponse.json({ error: "Invalid action." }, { status: 400 });
   } catch (err: any) {
     console.error("Error updating order:", err);

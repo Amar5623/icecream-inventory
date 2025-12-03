@@ -1,4 +1,3 @@
-// src/app/dashboard/orders/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -105,7 +104,68 @@ export default function OrdersPage() {
     });
   };
 
-  const fmt = (n: number) => `₹${Number(n || 0).toFixed(2)}`;
+  // helper: rupee formatter
+  const fmt = (n: number) => {
+    const num = Number(n || 0);
+    if (Number.isNaN(num)) return "₹0.00";
+    return new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency: "INR",
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(num);
+  };
+
+  // helper: status row for Settled tab (shows remaining)
+  const renderSettledInfo = (order: Order) => {
+    if (tab !== "Settled") return null;
+
+    const paid =
+      typeof order.settlementAmount === "number"
+        ? order.settlementAmount
+        : 0;
+    const remaining = Math.max(0, (order.total || 0) - paid);
+
+    return (
+      <div className="text-xs text-green-700 font-semibold flex flex-col sm:flex-row sm:items-center sm:justify-between mt-1">
+        <span>
+          ✔ Settled
+          {order.settlementMethod && <> with {order.settlementMethod}</>}
+          {paid > 0 && <> ({fmt(paid)})</>}
+          {order.settledAt && <> on {formatDate(order.settledAt)}</>}
+        </span>
+        {remaining > 0 && (
+          <span className="mt-1 sm:mt-0 text-amber-700">
+            Remaining: {fmt(remaining)}
+          </span>
+        )}
+      </div>
+    );
+  };
+
+  // helper: status row for Debt tab (shows paid + remaining)
+  const renderDebtInfo = (order: Order) => {
+    if (tab !== "Debt") return null;
+
+    const paid =
+      typeof order.settlementAmount === "number"
+        ? order.settlementAmount
+        : 0;
+    const remaining = Math.max(0, (order.total || 0) - paid);
+
+    return (
+      <div className="text-xs font-semibold flex flex-col sm:flex-row sm:items-center sm:justify-between mt-1">
+        <span className="text-amber-700">
+          ⚠ Debt order
+          {order.settledAt && <> since {formatDate(order.settledAt)}</>}
+        </span>
+        <span className="mt-1 sm:mt-0 text-gray-700">
+          Paid: {fmt(paid)} • Remaining:{" "}
+          <span className="text-amber-700">{fmt(remaining)}</span>
+        </span>
+      </div>
+    );
+  };
 
   // ===== load userId from localStorage =====
   useEffect(() => {
@@ -266,7 +326,7 @@ export default function OrdersPage() {
 
       toast.success("Order settled successfully.");
 
-      // remove from current list (now appears in Settled/Debt tab depending on method)
+      // remove from current Unsettled list (it will appear in Debt or Settled tab)
       setOrders((prev) => prev.filter((o) => o._id !== settleOrder._id));
       closeSettleModal();
     } catch (err: any) {
@@ -305,7 +365,7 @@ export default function OrdersPage() {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          action: "settleDebt", // backend should handle converting Debt → Cash/Bank/UPI
+          action: "settleDebt", // backend decides whether it stays in Debt or moves to Settled
           orderId: debtSettleOrder._id,
           userId,
           method: debtSettleMethod,
@@ -318,10 +378,18 @@ export default function OrdersPage() {
         throw new Error(data.error || "Failed to settle debt order");
       }
 
-      toast.success("Debt order settled successfully.");
+      const updated: Order = data.order || debtSettleOrder;
 
-      // remove from current Debt list (it will appear in Settled tab)
-      setOrders((prev) => prev.filter((o) => o._id !== debtSettleOrder._id));
+      toast.success("Debt order settlement recorded.");
+
+      setOrders((prev) => {
+        // if still Debt -> update in-place; else remove from Debt list
+        if (updated.settlementMethod === "Debt") {
+          return prev.map((o) => (o._id === updated._id ? { ...o, ...updated } : o));
+        }
+        return prev.filter((o) => o._id !== updated._id);
+      });
+
       closeDebtSettleModal();
     } catch (err: any) {
       console.error(err);
@@ -466,38 +534,9 @@ export default function OrdersPage() {
                     </div>
                   </div>
 
-                  {/* Status info for Settled / Discarded / Debt tabs */}
-                  {tab === "Settled" && (
-                    <div className="text-xs text-green-700 font-semibold flex items-center justify-between mt-1">
-                      <span>
-                        ✔ Settled
-                        {order.settlementMethod && (
-                          <>
-                            {" "}
-                            with {order.settlementMethod}
-                          </>
-                        )}
-                        {typeof order.settlementAmount === "number" &&
-                          order.settlementAmount > 0 && (
-                            <> ({fmt(order.settlementAmount)})</>
-                          )}
-                        {order.settledAt && (
-                          <> on {formatDate(order.settledAt)}</>
-                        )}
-                      </span>
-                    </div>
-                  )}
-
-                  {tab === "Debt" && (
-                    <div className="text-xs text-amber-700 font-semibold flex items-center justify-between mt-1">
-                      <span>
-                        ⚠ Settled as Debt
-                        {order.settledAt && (
-                          <> on {formatDate(order.settledAt)}</>
-                        )}
-                      </span>
-                    </div>
-                  )}
+                  {/* Status info for Settled / Debt / Discarded tabs */}
+                  {renderSettledInfo(order)}
+                  {renderDebtInfo(order)}
 
                   {tab === "Discarded" && (
                     <div className="text-xs text-red-700 font-semibold flex items-center justify-between mt-1">
@@ -604,8 +643,9 @@ export default function OrdersPage() {
                   className="w-full border rounded px-3 py-1.5 text-sm text-gray-900"
                 />
                 <p className="text-xs text-gray-500 mt-1">
-                  If amount &gt; customer debit, extra will be added to
-                  customer&apos;s credit.
+                  If amount is less than bill total, remaining amount will be
+                  kept as <strong>Debt</strong>. If amount &gt; customer debit,
+                  extra will be added to customer&apos;s credit.
                 </p>
               </div>
             )}
@@ -613,8 +653,8 @@ export default function OrdersPage() {
             {settleMethod === "Debt" && (
               <p className="text-xs text-gray-600 mb-4">
                 Entire bill amount will stay in customer&apos;s debit, but this
-                order will be marked as <strong>settled</strong> for records
-                and will appear in the <strong>Debt</strong> tab.
+                order will be marked as <strong>Debt</strong> and appear in the{" "}
+                <strong>Debt</strong> tab.
               </p>
             )}
 
@@ -653,8 +693,9 @@ export default function OrdersPage() {
               </span>
             </p>
             <p className="text-xs text-gray-500 mb-2">
-              This order was earlier settled as <strong>Debt</strong>. Now you
-              can record actual payment and move it to the{" "}
+              This order is currently in <strong>Debt</strong>. Any amount you
+              receive will reduce the remaining amount. Once the total paid is
+              greater than or equal to bill total, this order will move to the{" "}
               <strong>Settled</strong> tab.
             </p>
 
@@ -693,8 +734,10 @@ export default function OrdersPage() {
                 className="w-full border rounded px-3 py-1.5 text-sm text-gray-900"
               />
               <p className="text-xs text-gray-500 mt-1">
-                This amount will be recorded against this debt order and the
-                order will be moved to the <strong>Settled</strong> tab.
+                If the cumulative amount received for this order becomes greater
+                than or equal to the bill total, it will move to the{" "}
+                <strong>Settled</strong> tab. Otherwise it will remain in{" "}
+                <strong>Debt</strong>.
               </p>
             </div>
 

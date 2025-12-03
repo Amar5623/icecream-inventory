@@ -439,8 +439,15 @@ export default function CustomersPage() {
     return list;
   }, [customers, search, sortMode]);
 
-  const formatCurrency = (v?: number) =>
-    typeof v === "number" ? `₹${v.toFixed(2)}` : "-";
+ const formatCurrency = (v?: number) => {
+  if (typeof v !== "number" || Number.isNaN(v)) return "-";
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(v);
+};
 
   const handleClearFilters = () => {
     setSearch("");

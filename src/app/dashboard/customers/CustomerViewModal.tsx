@@ -24,9 +24,15 @@ interface Props {
   onDelete: (id: string) => void;
 }
 
-const formatCurrency = (v?: number) =>
-  typeof v === "number" ? `₹${v.toFixed(2)}` : "-";
-
+const formatCurrency = (v?: number) => {
+  if (typeof v !== "number" || Number.isNaN(v)) return "-";
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(v);
+};
 export default function CustomerViewModal({
   customer,
   onClose,

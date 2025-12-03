@@ -373,7 +373,16 @@ export default function BillingPage() {
   };
 
   // helper: rupee formatter
-  const fmt = (n: number) => `₹${Number(n || 0).toFixed(2)}`;
+  const fmt = (n: number) => {
+  const num = Number(n || 0);
+  if (Number.isNaN(num)) return "₹0.00";
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(num);
+};
 
   // ===== Update item safely (with stock limit) =====
   const updateItem = (index: number, changes: Partial<BillItem>) => {

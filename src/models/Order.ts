@@ -24,7 +24,8 @@ export interface IQuantitySummary {
   ml: number;
 }
 
-export type OrderStatus = "Unsettled" | "settled";
+// ✅ Added new "Debt" status here
+export type OrderStatus = "Unsettled" | "settled" | "Debt";
 
 export type SettlementMethod = "Cash" | "Bank/UPI" | "Debt";
 export type SettlementAction = "Created" | "Discarded" | "Settled";
@@ -57,7 +58,7 @@ export interface IOrder extends Document {
   discountPercentage: number;  // DISCOUNT PERCENTAGE
   total: number;               // TOTAL
 
-  status: OrderStatus;         // ORDER STATUS (Unsettled / settled)
+  status: OrderStatus;         // ORDER STATUS (Unsettled / settled / Debt)
 
   // settlement + discard tracking
   settlementMethod?: SettlementMethod | null; // how it was settled
@@ -159,7 +160,7 @@ const OrderSchema = new Schema<IOrder>(
 
     status: {
       type: String,
-      enum: ["Unsettled", "settled"],
+      enum: ["Unsettled", "settled", "Debt"], // ✅ Added "Debt" here
       required: true,
       default: "Unsettled",
     },
