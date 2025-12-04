@@ -1,3 +1,5 @@
+// src\app\api\sales\summary\route.ts
+
 import { NextResponse } from "next/server";
 import { connectDB } from "@/lib/mongodb";
 import Order from "@/models/Order";
@@ -68,13 +70,20 @@ export async function GET(req: Request) {
 
     // 1) Fetch orders for this user in the date range (by createdAt),
     //    excluding discarded orders.
-    const orderMatch: any = { userId };
+   const orderMatch: any = { userId };
 
-    if (from || to) {
-      orderMatch.createdAt = {};
-      if (from) orderMatch.createdAt.$gte = from;
-      if (to) orderMatch.createdAt.$lte = to;
-    }
+if (from || to) {
+  orderMatch.createdAt = {};
+  if (from) {
+    orderMatch.createdAt.$gte = from; // inclusive start
+  }
+  if (to) {
+    const toLimit = new Date(to);
+    toLimit.setDate(toLimit.getDate() + 1); // end of "to" day
+    orderMatch.createdAt.$lt = toLimit;     // half-open [from, to+1day)
+  }
+}
+
 
     // ignore discarded orders in analytics
     orderMatch.discardedAt = null;

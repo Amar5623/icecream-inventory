@@ -1,3 +1,5 @@
+// src\app\api\sales\customer-ledger\route.ts
+
 import { NextResponse } from "next/server";
 import { connectDB } from "@/lib/mongodb";
 import Order from "@/models/Order";
@@ -27,10 +29,20 @@ function parseDateParam(value: string | null): Date | null {
 function isWithinRange(date: Date, from?: Date | null, to?: Date | null) {
   if (!date) return false;
   const ts = date.getTime();
+
+  // from: inclusive, start of that day
   if (from && ts < from.getTime()) return false;
-  if (to && ts > to.getTime()) return false;
+
+  // to: inclusive – we treat it as end of that day by adding 1 day
+  if (to) {
+    const toLimit = new Date(to);
+    toLimit.setDate(toLimit.getDate() + 1); // make "to" inclusive
+    if (ts >= toLimit.getTime()) return false;
+  }
+
   return true;
 }
+
 
 export async function GET(req: Request) {
   try {
