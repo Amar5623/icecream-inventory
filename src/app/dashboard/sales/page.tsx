@@ -1,0 +1,765 @@
+// src/app/dashboard/sales/page.tsx
+
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import DashboardNavbar from "@/app/components/DashboardNavbar";
+import Footer from "@/app/components/Footer";
+import {
+  IndianRupee,
+  BarChart3,
+  TrendingUp,
+  Users,
+  CalendarRange,
+} from "lucide-react";
+
+type QuantityTotals = {
+  piece: number;
+  box: number;
+  kg: number;
+  litre: number;
+  gm: number;
+  ml: number;
+};
+
+type DailyStat = {
+  date: string;
+  totalSales: number;
+  totalOrders: number;
+  quantities: QuantityTotals;
+  cashReceived: number;
+  bankReceived: number;
+};
+
+type PaymentBreakdown = {
+  cash: number;
+  bank: number;
+  outstandingDebt: number;
+};
+
+type SalesSummaryResponse = {
+  totalSales: number;
+  totalOrders: number;
+  quantities: QuantityTotals;
+  paymentBreakdown: PaymentBreakdown;
+  overallDebit: number;
+  overallCredit: number;
+  netReceivable: number;
+  daily: DailyStat[];
+};
+
+type CustomerItem = {
+  _id: string;
+  name: string;
+  shopName: string;
+  debit: number;
+  credit: number;
+  totalSales: number;
+};
+
+type LedgerEntry = {
+  id: string;
+  type: "Sale" | "Payment" | "Adjustment";
+  at: string; // ISO
+  orderId?: string;
+  serialNumber?: string;
+  method?: string;
+  note?: string;
+  debit?: number;
+  credit?: number;
+};
+
+type CustomerLedgerResponse = {
+  customer: CustomerItem;
+  ledger: LedgerEntry[];
+  totals: {
+    debit: number;
+    credit: number;
+    netBalance: number;
+  };
+};
+
+type RangePreset = "7d" | "30d" | "90d" | "all";
+
+function formatINR(v: number) {
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    maximumFractionDigits: 2,
+  }).format(v || 0);
+}
+
+function formatDate(d: string) {
+  const date = new Date(d);
+  if (isNaN(date.getTime())) return "-";
+  return date.toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+export default function SalesPage() {
+  const [userId, setUserId] = useState<string | null>(null);
+
+  // Range filters
+  const [rangePreset, setRangePreset] = useState<RangePreset>("all");
+  const [from, setFrom] = useState<string>("");
+  const [to, setTo] = useState<string>("");
+
+  const [summary, setSummary] = useState<SalesSummaryResponse | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+
+  const [customers, setCustomers] = useState<CustomerItem[]>([]);
+  const [customersLoading, setCustomersLoading] = useState(false);
+
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(
+    null
+  );
+  const [customerLedger, setCustomerLedger] =
+    useState<CustomerLedgerResponse | null>(null);
+  const [ledgerLoading, setLedgerLoading] = useState(false);
+
+  // Read userId from localStorage (adjust if your app stores it differently)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    let id: string | null = null;
+
+    // Example 1: userId stored directly
+    id = window.localStorage.getItem("userId");
+
+    // Example 2: user JSON in "user" key (uncomment & adapt if needed)
+    if (!id) {
+      try {
+        const raw = window.localStorage.getItem("user");
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed?._id) id = String(parsed._id);
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    if (id) {
+      setUserId(id);
+    } else {
+      setSummaryError("User not found. Please login again.");
+    }
+  }, []);
+
+  // When preset changes, recompute from/to
+  useEffect(() => {
+    if (rangePreset === "all") {
+      setFrom("");
+      setTo("");
+      return;
+    }
+
+    const now = new Date();
+    const toStr = now.toISOString().slice(0, 10);
+
+    let days = 30;
+    if (rangePreset === "7d") days = 7;
+    if (rangePreset === "90d") days = 90;
+
+    const fromDate = new Date(
+      now.getTime() - days * 24 * 60 * 60 * 1000
+    ).toISOString().slice(0, 10);
+
+    setFrom(fromDate);
+    setTo(toStr);
+  }, [rangePreset]);
+
+  // Fetch sales summary
+  useEffect(() => {
+    if (!userId) return;
+
+    const params = new URLSearchParams({ userId });
+    if (from) params.set("from", from);
+    if (to) params.set("to", to);
+
+    const url = `/api/sales/summary?${params.toString()}`;
+
+    setSummaryLoading(true);
+    setSummaryError(null);
+
+    fetch(url)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(await res.text());
+        return res.json();
+      })
+      .then((data: SalesSummaryResponse) => {
+        setSummary(data);
+      })
+      .catch((err) => {
+        console.error(err);
+        setSummaryError("Failed to load sales summary");
+      })
+      .finally(() => setSummaryLoading(false));
+  }, [userId, from, to]);
+
+  // Fetch customers once (for this user)
+  useEffect(() => {
+    if (!userId) return;
+
+    const params = new URLSearchParams({ userId });
+    const url = `/api/customers?${params.toString()}`;
+
+    setCustomersLoading(true);
+
+    fetch(url)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(await res.text());
+        return res.json();
+      })
+      .then((data: any[]) => {
+        const mapped: CustomerItem[] = data.map((c) => ({
+          _id: String(c._id),
+          name: c.name,
+          shopName: c.shopName,
+          debit: Number(c.debit || 0),
+          credit: Number(c.credit || 0),
+          totalSales: Number(c.totalSales || 0),
+        }));
+        setCustomers(mapped);
+        if (mapped.length && !selectedCustomerId) {
+          setSelectedCustomerId(mapped[0]._id);
+        }
+      })
+      .catch((err) => {
+        console.error(err);
+      })
+      .finally(() => setCustomersLoading(false));
+  }, [userId]);
+
+  // Fetch customer ledger whenever selection / range changes
+  useEffect(() => {
+    if (!userId || !selectedCustomerId) return;
+
+    const params = new URLSearchParams({
+      userId,
+      customerId: selectedCustomerId,
+    });
+    if (from) params.set("from", from);
+    if (to) params.set("to", to);
+
+    const url = `/api/sales/customer-ledger?${params.toString()}`;
+
+    setLedgerLoading(true);
+    setCustomerLedger(null);
+
+    fetch(url)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(await res.text());
+        return res.json();
+      })
+      .then((data: CustomerLedgerResponse) => {
+        setCustomerLedger(data);
+      })
+      .catch((err) => {
+        console.error(err);
+      })
+      .finally(() => setLedgerLoading(false));
+  }, [userId, selectedCustomerId, from, to]);
+
+  const sortedCustomers = useMemo(() => {
+    return [...customers].sort(
+      (a, b) => b.debit - b.credit - (a.debit - a.credit)
+    );
+  }, [customers]);
+
+  return (
+    <div className="flex flex-col min-h-screen bg-gray-50">
+      <DashboardNavbar />
+
+      <main className="flex-1 max-w-7xl mx-auto w-full px-4 md:px-6 py-6 md:py-8 space-y-6">
+        {/* Header + Filters */}
+        <section className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div>
+            <h1 className="text-2xl md:text-3xl font-bold text-blue-700 flex items-center gap-2">
+              <BarChart3 className="w-7 h-7" />
+              Sales Analytics
+            </h1>
+            <p className="text-sm text-gray-500 mt-1">
+              Track total sales, payments, credits/debits and customer khata.
+            </p>
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center bg-white rounded-xl shadow-sm px-3 py-2 border border-gray-100">
+            <div className="flex items-center gap-2 text-gray-600">
+              <CalendarRange className="w-4 h-4" />
+              <span className="text-xs font-semibold uppercase tracking-wide">
+                Date Range
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {(["7d", "30d", "90d", "all"] as RangePreset[]).map((preset) => (
+                <button
+                  key={preset}
+                  onClick={() => setRangePreset(preset)}
+                  className={`px-2.5 py-1 text-xs rounded-full border transition ${
+                    rangePreset === preset
+                      ? "bg-blue-600 text-white border-blue-600"
+                      : "bg-white text-gray-700 border-gray-200 hover:bg-blue-50"
+                  }`}
+                >
+                  {preset === "7d" && "Last 7 days"}
+                  {preset === "30d" && "Last 30 days"}
+                  {preset === "90d" && "Last 90 days"}
+                  {preset === "all" && "All time"}
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-2 w-full sm:w-auto">
+              <input
+                type="date"
+                value={from}
+                onChange={(e) => {
+                  setRangePreset("all");
+                  setFrom(e.target.value);
+                }}
+                className="px-2 py-1 text-xs border rounded-md bg-white flex-1"
+              />
+              <input
+                type="date"
+                value={to}
+                onChange={(e) => {
+                  setRangePreset("all");
+                  setTo(e.target.value);
+                }}
+                className="px-2 py-1 text-xs border rounded-md bg-white flex-1"
+              />
+            </div>
+          </div>
+        </section>
+
+        {/* Top stat cards */}
+        <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          {/* Total Sales */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 flex flex-col gap-1">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-gray-500 uppercase">
+                Total Sales
+              </span>
+              <IndianRupee className="w-4 h-4 text-blue-500" />
+            </div>
+            <p className="text-xl font-bold text-gray-800">
+              {summaryLoading
+                ? "Loading..."
+                : summary
+                ? formatINR(summary.totalSales)
+                : "--"}
+            </p>
+            <span className="text-xs text-gray-400">
+              All bills (excluding discarded)
+            </span>
+          </div>
+
+          {/* Total Orders */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 flex flex-col gap-1">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-gray-500 uppercase">
+                Total Orders
+              </span>
+              <TrendingUp className="w-4 h-4 text-green-500" />
+            </div>
+            <p className="text-xl font-bold text-gray-800">
+              {summaryLoading
+                ? "Loading..."
+                : summary
+                ? summary.totalOrders
+                : "--"}
+            </p>
+            <span className="text-xs text-gray-400">In selected period</span>
+          </div>
+
+          {/* Business Debit / Credit */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 flex flex-col gap-1">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-gray-500 uppercase">
+                Business Receivables
+              </span>
+            </div>
+            <p className="text-sm text-gray-600">
+              Debit:{" "}
+              <span className="font-semibold text-gray-800">
+                {summary ? formatINR(summary.overallDebit) : "--"}
+              </span>
+            </p>
+            <p className="text-sm text-gray-600">
+              Credit:{" "}
+              <span className="font-semibold text-gray-800">
+                {summary ? formatINR(summary.overallCredit) : "--"}
+              </span>
+            </p>
+            <p className="text-xs text-gray-500 mt-1">
+              Net:{" "}
+              <span className="font-semibold text-blue-700">
+                {summary ? formatINR(summary.netReceivable) : "--"}
+              </span>
+            </p>
+          </div>
+
+          {/* Money division */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 flex flex-col gap-1">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-gray-500 uppercase">
+                Payment Split
+              </span>
+            </div>
+            <p className="text-xs text-gray-600">
+              Cash:{" "}
+              <span className="font-semibold text-gray-800">
+                {summary
+                  ? formatINR(summary.paymentBreakdown.cash)
+                  : "--"}
+              </span>
+            </p>
+            <p className="text-xs text-gray-600">
+              Bank/UPI:{" "}
+              <span className="font-semibold text-gray-800">
+                {summary
+                  ? formatINR(summary.paymentBreakdown.bank)
+                  : "--"}
+              </span>
+            </p>
+            <p className="text-xs text-gray-600">
+              On Debt (outstanding):{" "}
+              <span className="font-semibold text-red-600">
+                {summary
+                  ? formatINR(summary.paymentBreakdown.outstandingDebt)
+                  : "--"}
+              </span>
+            </p>
+          </div>
+        </section>
+
+        {/* Quantities + Daily timeline */}
+        <section className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+          {/* Quantities */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 xl:col-span-1">
+            <h2 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+              <TrendingUp className="w-4 h-4 text-blue-500" />
+              Quantities Sold (Total)
+            </h2>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              {[
+                ["Box", "box"],
+                ["Kg", "kg"],
+                ["Litre", "litre"],
+                ["Piece", "piece"],
+                ["Gram", "gm"],
+                ["ML", "ml"],
+              ].map(([label, key]) => (
+                <div
+                  key={key}
+                  className="flex flex-col border border-gray-100 rounded-lg px-3 py-2 bg-gray-50/60"
+                >
+                  <span className="text-xs text-gray-500">{label}</span>
+                  <span className="text-base font-semibold text-gray-800">
+                    {summary
+                      ? (summary.quantities as any)[key] || 0
+                      : "--"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Daily timeline */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 xl:col-span-2 overflow-hidden">
+            <h2 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+              <BarChart3 className="w-4 h-4 text-purple-500" />
+              Daily Timeline (Sales & Payments)
+            </h2>
+            <div className="overflow-auto max-h-72 text-xs">
+              <table className="min-w-full text-left">
+                <thead className="bg-gray-50 sticky top-0 z-10">
+                  <tr>
+                    <th className="px-3 py-2 font-semibold text-gray-500">
+                      Date
+                    </th>
+                    <th className="px-3 py-2 font-semibold text-gray-500">
+                      Orders
+                    </th>
+                    <th className="px-3 py-2 font-semibold text-gray-500">
+                      Sales
+                    </th>
+                    <th className="px-3 py-2 font-semibold text-gray-500">
+                      Cash
+                    </th>
+                    <th className="px-3 py-2 font-semibold text-gray-500">
+                      Bank/UPI
+                    </th>
+                    <th className="px-3 py-2 font-semibold text-gray-500">
+                      Box
+                    </th>
+                    <th className="px-3 py-2 font-semibold text-gray-500">
+                      Kg
+                    </th>
+                    <th className="px-3 py-2 font-semibold text-gray-500">
+                      Litre
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {summaryLoading && (
+                    <tr>
+                      <td
+                        colSpan={8}
+                        className="px-3 py-4 text-center text-gray-400"
+                      >
+                        Loading...
+                      </td>
+                    </tr>
+                  )}
+                  {!summaryLoading &&
+                    summary &&
+                    summary.daily.length === 0 && (
+                      <tr>
+                        <td
+                          colSpan={8}
+                          className="px-3 py-4 text-center text-gray-400"
+                        >
+                          No data in this range
+                        </td>
+                      </tr>
+                    )}
+                  {!summaryLoading &&
+                    summary &&
+                    summary.daily.map((d) => (
+                      <tr key={d.date} className="border-t text-gray-700">
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          {formatDate(d.date)}
+                        </td>
+                        <td className="px-3 py-2">{d.totalOrders}</td>
+                        <td className="px-3 py-2">
+                          {formatINR(d.totalSales)}
+                        </td>
+                        <td className="px-3 py-2">
+                          {formatINR(d.cashReceived)}
+                        </td>
+                        <td className="px-3 py-2">
+                          {formatINR(d.bankReceived)}
+                        </td>
+                        <td className="px-3 py-2">{d.quantities.box}</td>
+                        <td className="px-3 py-2">{d.quantities.kg}</td>
+                        <td className="px-3 py-2">{d.quantities.litre}</td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        {/* Customer Khata Section */}
+        <section className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          {/* Customers list */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 lg:col-span-1">
+            <h2 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+              <Users className="w-4 h-4 text-blue-500" />
+              Customers (Khata)
+            </h2>
+            <div className="border rounded-lg overflow-hidden max-h-80 flex flex-col">
+              <div className="flex-1 overflow-auto text-xs">
+                {customersLoading && (
+                  <div className="p-3 text-gray-400 text-center">
+                    Loading customers...
+                  </div>
+                )}
+                {!customersLoading && sortedCustomers.length === 0 && (
+                  <div className="p-3 text-gray-400 text-center">
+                    No customers yet.
+                  </div>
+                )}
+                {!customersLoading &&
+                  sortedCustomers.map((c) => {
+                    const net = c.debit - c.credit;
+                    const isSelected = selectedCustomerId === c._id;
+                    return (
+                      <button
+                        key={c._id}
+                        onClick={() => setSelectedCustomerId(c._id)}
+                        className={`w-full text-left px-3 py-2 border-b last:border-b-0 flex flex-col gap-0.5 hover:bg-blue-50 transition ${
+                          isSelected ? "bg-blue-50" : "bg-white"
+                        }`}
+                      >
+                        <div className="flex justify-between items-center">
+                          <span className="font-semibold text-gray-800 text-xs">
+                            {c.name}
+                          </span>
+                          <span
+                            className={`text-xs font-semibold ${
+                              net > 0 ? "text-red-600" : "text-green-600"
+                            }`}
+                          >
+                            {formatINR(net)}
+                          </span>
+                        </div>
+                        <span className="text-[11px] text-gray-500">
+                          {c.shopName}
+                        </span>
+                      </button>
+                    );
+                  })}
+              </div>
+            </div>
+          </div>
+
+          {/* Ledger for selected customer */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 lg:col-span-2">
+            <h2 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+              <IndianRupee className="w-4 h-4 text-green-500" />
+              Customer Credit / Debit History
+            </h2>
+
+            {!selectedCustomerId && (
+              <div className="text-xs text-gray-500">
+                Select a customer to view their khata.
+              </div>
+            )}
+
+            {selectedCustomerId && ledgerLoading && (
+              <div className="text-xs text-gray-500">Loading ledger...</div>
+            )}
+
+            {selectedCustomerId && !ledgerLoading && customerLedger && (
+              <div className="space-y-3">
+                {/* Top summary */}
+                <div className="flex flex-wrap justify-between gap-2 text-xs bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
+                  <div>
+                    <p className="font-semibold text-gray-800">
+                      {customerLedger.customer.name}
+                    </p>
+                    <p className="text-[11px] text-gray-500">
+                      {customerLedger.customer.shopName}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[11px] text-gray-500">
+                      Debit:{" "}
+                      <span className="font-semibold text-gray-800">
+                        {formatINR(customerLedger.totals.debit)}
+                      </span>
+                    </p>
+                    <p className="text-[11px] text-gray-500">
+                      Credit:{" "}
+                      <span className="font-semibold text-gray-800">
+                        {formatINR(customerLedger.totals.credit)}
+                      </span>
+                    </p>
+                    <p className="text-[11px] text-gray-500">
+                      Net Balance:{" "}
+                      <span
+                        className={`font-semibold ${
+                          customerLedger.totals.netBalance > 0
+                            ? "text-red-600"
+                            : "text-green-600"
+                        }`}
+                      >
+                        {formatINR(customerLedger.totals.netBalance)}
+                      </span>
+                    </p>
+                  </div>
+                </div>
+
+                {/* Ledger table */}
+                <div className="overflow-auto max-h-80 text-xs border rounded-lg">
+                  <table className="min-w-full text-left">
+                    <thead className="bg-gray-50 sticky top-0 z-10">
+                      <tr>
+                        <th className="px-3 py-2 font-semibold text-gray-500">
+                          Date
+                        </th>
+                        <th className="px-3 py-2 font-semibold text-gray-500">
+                          Type
+                        </th>
+                        <th className="px-3 py-2 font-semibold text-gray-500">
+                          Note / Order
+                        </th>
+                        <th className="px-3 py-2 font-semibold text-gray-500">
+                          Method
+                        </th>
+                        <th className="px-3 py-2 font-semibold text-gray-500">
+                          Debit
+                        </th>
+                        <th className="px-3 py-2 font-semibold text-gray-500">
+                          Credit
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {customerLedger.ledger.length === 0 && (
+                        <tr>
+                          <td
+                            colSpan={6}
+                            className="px-3 py-4 text-center text-gray-400"
+                          >
+                            No entries found in this range
+                          </td>
+                        </tr>
+                      )}
+                      {customerLedger.ledger.map((e) => (
+                        <tr key={e.id} className="border-t text-gray-700">
+                          <td className="px-3 py-2 whitespace-nowrap">
+                            {formatDate(e.at)}
+                          </td>
+                          <td className="px-3 py-2">
+                            {e.type === "Sale" && (
+                              <span className="text-[11px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">
+                                Sale
+                              </span>
+                            )}
+                            {e.type === "Payment" && (
+                              <span className="text-[11px] px-2 py-0.5 rounded-full bg-green-50 text-green-700">
+                                Payment
+                              </span>
+                            )}
+                            {e.type === "Adjustment" && (
+                              <span className="text-[11px] px-2 py-0.5 rounded-full bg-yellow-50 text-yellow-700">
+                                Adj.
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className="block">
+                              {e.note || "-"}
+                            </span>
+                            {e.serialNumber && (
+                              <span className="text-[11px] text-gray-400">
+                                Serial: {e.serialNumber}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2">
+                            {e.method || "-"}
+                          </td>
+                          <td className="px-3 py-2 text-red-600">
+                            {e.debit ? formatINR(e.debit) : "-"}
+                          </td>
+                          <td className="px-3 py-2 text-green-600">
+                            {e.credit ? formatINR(e.credit) : "-"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {summaryError && (
+          <p className="text-xs text-red-500">{summaryError}</p>
+        )}
+      </main>
+
+      <Footer />
+    </div>
+  );
+}

@@ -55,6 +55,13 @@ type Order = {
   createdAt?: string;
 };
 
+type Product = {
+  _id: string;
+  name: string;
+  packUnit?: string; // e.g. "1L", "90ml", "500g"
+};
+
+
 type SettleMethod = "Cash" | "Bank/UPI" | "Debt";
 type CashBankMethod = "Cash" | "Bank/UPI";
 type TabFilter = "Unsettled" | "Settled" | "Discarded" | "Debt";
@@ -65,6 +72,9 @@ export default function OrdersPage() {
   const [tab, setTab] = useState<TabFilter>("Unsettled");
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(false);
+
+  const [products, setProducts] = useState<Product[]>([]);
+
 
   // settlement modal state (for UNSETTLED orders)
   const [settleOrder, setSettleOrder] = useState<Order | null>(null);
@@ -167,6 +177,27 @@ export default function OrdersPage() {
     );
   };
 
+  // ===== helper: get packUnit for a line item (from products list) =====
+  const getPackUnitForItem = (it: OrderLineItem) => {
+    if (!products.length) return undefined;
+
+    // Prefer match by productId if present
+    if (it.productId) {
+      const byId = products.find((p) => p._id === it.productId);
+      if (byId?.packUnit) return byId.packUnit;
+    }
+
+    // Fallback: match by name (case-insensitive)
+    const name = it.productName?.trim().toLowerCase();
+    if (!name) return undefined;
+
+    const byName = products.find(
+      (p) => p.name.trim().toLowerCase() === name
+    );
+    return byName?.packUnit;
+  };
+
+
   // ===== load userId from localStorage =====
   useEffect(() => {
     try {
@@ -185,6 +216,40 @@ export default function OrdersPage() {
       toast.error("Failed to read user from localStorage");
     }
   }, []);
+
+  // ===== fetch products for packUnit lookup =====
+  useEffect(() => {
+    if (!userId) return;
+
+    const loadProducts = async () => {
+      try {
+        const res = await fetch(`/api/products?userId=${encodeURIComponent(userId)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.error || "Failed to fetch products");
+
+        let arr: any[] = [];
+        if (Array.isArray(data)) arr = data;
+        else if (Array.isArray((data as any).products)) arr = (data as any).products;
+        else
+          arr = Object.values(data)
+            .filter((v) => Array.isArray(v))
+            .flat();
+
+        const mapped: Product[] = arr.map((p: any) => ({
+          _id: String(p._id),
+          name: p.name,
+          packUnit: p.packUnit,
+        }));
+
+        setProducts(mapped);
+      } catch (err) {
+        console.error(err);
+      }
+    };
+
+    loadProducts();
+  }, [userId]);
+
 
   // ===== fetch orders whenever tab or userId changes =====
   useEffect(() => {
@@ -422,41 +487,37 @@ export default function OrdersPage() {
             <div className="inline-flex rounded-md shadow-sm border border-gray-200 overflow-hidden text-sm font-medium">
               <button
                 onClick={() => setTab("Unsettled")}
-                className={`px-3 py-1.5 ${
-                  tab === "Unsettled"
-                    ? "bg-blue-600 text-white"
-                    : "bg-white text-gray-700 hover:bg-gray-50"
-                }`}
+                className={`px-3 py-1.5 ${tab === "Unsettled"
+                  ? "bg-blue-600 text-white"
+                  : "bg-white text-gray-700 hover:bg-gray-50"
+                  }`}
               >
                 Unsettled
               </button>
               <button
                 onClick={() => setTab("Settled")}
-                className={`px-3 py-1.5 border-l border-gray-200 ${
-                  tab === "Settled"
-                    ? "bg-blue-600 text-white"
-                    : "bg-white text-gray-700 hover:bg-gray-50"
-                }`}
+                className={`px-3 py-1.5 border-l border-gray-200 ${tab === "Settled"
+                  ? "bg-blue-600 text-white"
+                  : "bg-white text-gray-700 hover:bg-gray-50"
+                  }`}
               >
                 Settled
               </button>
               <button
                 onClick={() => setTab("Debt")}
-                className={`px-3 py-1.5 border-l border-gray-200 ${
-                  tab === "Debt"
-                    ? "bg-blue-600 text-white"
-                    : "bg-white text-gray-700 hover:bg-gray-50"
-                }`}
+                className={`px-3 py-1.5 border-l border-gray-200 ${tab === "Debt"
+                  ? "bg-blue-600 text-white"
+                  : "bg-white text-gray-700 hover:bg-gray-50"
+                  }`}
               >
                 Debt
               </button>
               <button
                 onClick={() => setTab("Discarded")}
-                className={`px-3 py-1.5 border-l border-gray-200 ${
-                  tab === "Discarded"
-                    ? "bg-blue-600 text-white"
-                    : "bg-white text-gray-700 hover:bg-gray-50"
-                }`}
+                className={`px-3 py-1.5 border-l border-gray-200 ${tab === "Discarded"
+                  ? "bg-blue-600 text-white"
+                  : "bg-white text-gray-700 hover:bg-gray-50"
+                  }`}
               >
                 Discarded
               </button>
@@ -617,11 +678,10 @@ export default function OrdersPage() {
                     key={m}
                     type="button"
                     onClick={() => setSettleMethod(m)}
-                    className={`px-3 py-1.5 text-xs rounded-md border transition ${
-                      settleMethod === m
-                        ? "bg-blue-600 text-white border-blue-600"
-                        : "border-gray-300 text-gray-700 hover:bg-gray-50"
-                    }`}
+                    className={`px-3 py-1.5 text-xs rounded-md border transition ${settleMethod === m
+                      ? "bg-blue-600 text-white border-blue-600"
+                      : "border-gray-300 text-gray-700 hover:bg-gray-50"
+                      }`}
                   >
                     {m}
                   </button>
@@ -709,11 +769,10 @@ export default function OrdersPage() {
                     key={m}
                     type="button"
                     onClick={() => setDebtSettleMethod(m)}
-                    className={`px-3 py-1.5 text-xs rounded-md border transition ${
-                      debtSettleMethod === m
-                        ? "bg-blue-600 text-white border-blue-600"
-                        : "border-gray-300 text-gray-700 hover:bg-gray-50"
-                    }`}
+                    className={`px-3 py-1.5 text-xs rounded-md border transition ${debtSettleMethod === m
+                      ? "bg-blue-600 text-white border-blue-600"
+                      : "border-gray-300 text-gray-700 hover:bg-gray-50"
+                      }`}
                   >
                     {m}
                   </button>
@@ -778,16 +837,21 @@ export default function OrdersPage() {
                 <div className="font-semibold mb-1">Items:</div>
                 {viewOrder.items && viewOrder.items.length > 0 ? (
                   <ul className="list-disc list-inside space-y-1">
-                    {viewOrder.items.map((it, idx) => (
-                      <li key={idx}>
-                        {it.productName} —{" "}
-                        <span className="font-semibold">
-                          {it.quantity} {it.unit}
-                        </span>
-                      </li>
-                    ))}
+                    {viewOrder.items.map((it, idx) => {
+                      const packUnit = getPackUnitForItem(it);
+                      return (
+                        <li key={idx}>
+                          {it.productName} —{" "}
+                          <span className="font-semibold">
+                            {it.quantity}
+                            {packUnit ? ` ${packUnit}` : ""}
+                          </span>
+                        </li>
+                      );
+                    })}
                   </ul>
                 ) : (
+
                   <div className="text-xs text-gray-500">
                     No main items recorded.
                   </div>
@@ -798,19 +862,24 @@ export default function OrdersPage() {
                 <div className="font-semibold mb-1">Free Items:</div>
                 {viewOrder.freeItems && viewOrder.freeItems.length > 0 ? (
                   <ul className="list-disc list-inside space-y-1">
-                    {viewOrder.freeItems.map((it, idx) => (
-                      <li key={idx}>
-                        {it.productName} —{" "}
-                        <span className="font-semibold">
-                          {it.quantity} {it.unit}
-                        </span>{" "}
-                        <span className="text-xs text-green-700">
-                          (FREE)
-                        </span>
-                      </li>
-                    ))}
+                    {viewOrder.freeItems.map((it, idx) => {
+                      const packUnit = getPackUnitForItem(it);
+                      return (
+                        <li key={idx}>
+                          {it.productName} —{" "}
+                          <span className="font-semibold">
+                            {it.quantity}
+                            {packUnit ? ` ${packUnit}` : ""}
+                          </span>{" "}
+                          <span className="text-xs text-green-700">
+                            (FREE)
+                          </span>
+                        </li>
+                      );
+                    })}
                   </ul>
                 ) : (
+
                   <div className="text-xs text-gray-500">
                     No free items for this order.
                   </div>

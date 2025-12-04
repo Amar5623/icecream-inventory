@@ -33,6 +33,9 @@ type Product = {
 
   // actual DB quantity field
   quantity?: number;
+
+  packQuantity?: number;
+  packUnit?: string; // e.g. "1L", "90ml", "500g"
 };
 
 type SellerDetails = {
@@ -215,7 +218,7 @@ export default function BillingPage() {
           setSeller(s);
         }
       })
-      .catch(() => {});
+      .catch(() => { });
 
     // --- Fetch Customers ---
     fetch(`/api/customers?userId=${encodeURIComponent(uid)}`)
@@ -244,7 +247,7 @@ export default function BillingPage() {
           setCustomers(mapped);
         }
       })
-      .catch(() => {});
+      .catch(() => { });
 
     // --- Fetch Products ---
     fetch(`/api/products?userId=${encodeURIComponent(uid)}`)
@@ -262,7 +265,7 @@ export default function BillingPage() {
           if (arr.length) setProducts(arr[0] as Product[]);
         }
       })
-      .catch(() => {});
+      .catch(() => { });
 
     // --- Set Serial & Date (persist per tab using sessionStorage) ---
     try {
@@ -374,15 +377,15 @@ export default function BillingPage() {
 
   // helper: rupee formatter
   const fmt = (n: number) => {
-  const num = Number(n || 0);
-  if (Number.isNaN(num)) return "₹0.00";
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(num);
-};
+    const num = Number(n || 0);
+    if (Number.isNaN(num)) return "₹0.00";
+    return new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency: "INR",
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(num);
+  };
 
   // ===== Update item safely (with stock limit) =====
   const updateItem = (index: number, changes: Partial<BillItem>) => {
@@ -420,8 +423,7 @@ export default function BillingPage() {
         ) {
           item.quantity = stock;
           toast.error(
-            `Only ${stock} ${matched?.unit || "units"} available in stock for ${
-              matched?.name || "this product"
+            `Only ${stock} ${matched?.unit || "units"} available in stock for ${matched?.name || "this product"
             }`
           );
         }
@@ -757,7 +759,7 @@ export default function BillingPage() {
       if (logoDataUrl) {
         try {
           doc.addImage(logoDataUrl, "PNG", margin.left, topY - 10, 60, 60);
-        } catch {}
+        } catch { }
       }
 
       doc.setFont("helvetica", "bold");
@@ -1226,11 +1228,11 @@ export default function BillingPage() {
                   <strong>Address:</strong>{" "}
                   {sameAsBilling
                     ? billingCustomer?.address ||
-                      billingCustomer?.shopAddress ||
-                      "-"
+                    billingCustomer?.shopAddress ||
+                    "-"
                     : shippingCustomer?.address ||
-                      shippingCustomer?.shopAddress ||
-                      "-"}
+                    shippingCustomer?.shopAddress ||
+                    "-"}
                 </div>
               </div>
             </div>
@@ -1318,10 +1320,17 @@ export default function BillingPage() {
                         {matched && typeof stock === "number" && (
                           <div className="mt-1 text-[10px] text-gray-500">
                             In stock:{" "}
-                            <span className="font-semibold">{stock}</span>{" "}
-                            {matched.unit || "units"}
+                            <span className="font-semibold">{stock}</span>
+                            {matched.packUnit && (
+                              <>
+                                {" "}
+                                | Pack:{" "}
+                                <span className="font-semibold">{matched.packUnit}</span>
+                              </>
+                            )}
                           </div>
                         )}
+
                       </td>
 
                       {/* QUANTITY INPUT */}
@@ -1373,12 +1382,17 @@ export default function BillingPage() {
                           {matched && typeof stock === "number" && (
                             <span className="mt-1 text-[10px] text-gray-500">
                               Currently in stock:{" "}
-                              <span className="font-semibold">
-                                {stock}
-                              </span>{" "}
-                              {matched.unit || "units"}
+                              <span className="font-semibold">{stock}</span>
+                              {matched.packUnit && (
+                                <>
+                                  {" "}
+                                  | Pack:{" "}
+                                  <span className="font-semibold">{matched.packUnit}</span>
+                                </>
+                              )}
                             </span>
                           )}
+
                         </div>
                       </td>
 

@@ -1,6 +1,5 @@
 // src/app/dashboard/stocks/page.tsx
 
-
 "use client";
 
 import { useEffect, useState } from "react";
@@ -19,6 +18,9 @@ interface Product {
   unit: "piece" | "box" | "kg" | "litre" | "gm" | "ml";
   quantity: number;
   minStock?: number;
+  // 🔽 from Product model
+  packQuantity?: number;
+  packUnit?: string; // e.g., "1L", "90ml", "500g"
 }
 
 export default function StockPage() {
@@ -54,7 +56,9 @@ export default function StockPage() {
     if (!userId) return;
     try {
       setLoading(true);
-      const res = await fetch(`/api/products?userId=${encodeURIComponent(userId)}`);
+      const res = await fetch(
+        `/api/products?userId=${encodeURIComponent(userId)}`
+      );
       if (!res.ok) throw new Error("Failed to fetch stocks");
       const data = await res.json();
       setProducts(Array.isArray(data) ? data : []);
@@ -105,11 +109,11 @@ export default function StockPage() {
 
     // ✅ Add Date & Time below the title
     const now = new Date();
-    const dateTime = `${String(now.getDate()).padStart(2, "0")}/${
-      String(now.getMonth() + 1).padStart(2, "0")
-    }/${now.getFullYear()} ${String(now.getHours()).padStart(2, "0")}:${String(
-      now.getMinutes()
-    ).padStart(2, "0")}`;
+    const dateTime = `${String(now.getDate()).padStart(2, "0")}/${String(
+      now.getMonth() + 1
+    ).padStart(2, "0")}/${now.getFullYear()} ${String(
+      now.getHours()
+    ).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 
     doc.setFontSize(11);
     doc.text(`Generated on: ${dateTime}`, 14, 22);
@@ -118,12 +122,13 @@ export default function StockPage() {
     const tableData = filteredProducts.map((p) => [
       p.name,
       p.category || "-",
-      `${p.quantity} ${p.unit}`,
+      String(p.quantity), // 🔁 ONLY quantity
+      p.packUnit || "-",  // 🔁 NEW: pack unit column
       p.minStock !== undefined ? p.minStock : "-",
     ]);
 
     autoTable(doc, {
-      head: [["Name", "Category", "Quantity", "Min Stock"]],
+      head: [["Name", "Category", "Quantity", "Pack Unit", "Min Stock"]],
       body: tableData,
       startY: 30, // ⬅️ shifted down because we added date/time
       didParseCell: function (data) {
@@ -131,7 +136,8 @@ export default function StockPage() {
           const rowIndex = data.row.index;
           const product = filteredProducts[rowIndex];
           const isLow =
-            product.minStock !== undefined && product.quantity < product.minStock;
+            product.minStock !== undefined &&
+            product.quantity < product.minStock;
 
           if (isLow) {
             data.cell.styles.fillColor = [255, 200, 200]; // light red bg
@@ -162,15 +168,15 @@ export default function StockPage() {
         body: JSON.stringify({ userId }),
       });
 
-      // If server returned HTML because route not found, res.json() will throw.
-      // Catch that and show helpful message.
       let data;
       try {
         data = await res.json();
       } catch (parseErr) {
         const text = await res.text().catch(() => "");
         console.error("Invalid JSON from /api/products/empty:", text);
-        throw new Error("Server returned non-JSON response. Check the route file and server logs.");
+        throw new Error(
+          "Server returned non-JSON response. Check the route file and server logs."
+        );
       }
 
       if (!res.ok) {
@@ -210,7 +216,9 @@ export default function StockPage() {
       <main className="flex-grow container mx-auto px-4 py-6">
         {/* Header */}
         <div className="flex justify-between items-center mb-6">
-          <h1 className="text-2xl font-bold text-gray-800">Stock Management</h1>
+          <h1 className="text-2xl font-bold text-gray-800">
+            Stock Management
+          </h1>
           <div className="flex gap-3">
             {filteredProducts.length === 0 ? (
               <button
@@ -298,24 +306,28 @@ export default function StockPage() {
                 <th className="px-6 py-4 text-left font-semibold text-sm uppercase tracking-wider">
                   Quantity
                 </th>
+                <th className="px-6 py-4 text-left font-semibold text-sm uppercase tracking-wider">
+                  Pack Unit
+                </th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={3} className="text-center py-6 text-gray-600">
+                  <td colSpan={4} className="text-center py-6 text-gray-600">
                     Loading...
                   </td>
                 </tr>
               ) : filteredProducts.length === 0 ? (
                 <tr>
-                  <td colSpan={3} className="text-center py-6 text-gray-500">
+                  <td colSpan={4} className="text-center py-6 text-gray-500">
                     No products found
                   </td>
                 </tr>
               ) : (
                 filteredProducts.map((p, i) => {
-                  const isLow = p.minStock !== undefined && p.quantity < p.minStock;
+                  const isLow =
+                    p.minStock !== undefined && p.quantity < p.minStock;
                   return (
                     <tr
                       key={p._id}
@@ -329,7 +341,10 @@ export default function StockPage() {
                     >
                       <td className="px-6 py-4 font-medium">{p.name}</td>
                       <td className="px-6 py-4">{p.category || "-"}</td>
-                      <td className="px-6 py-4">{`${p.quantity} ${p.unit}`}</td>
+                      {/* 🔁 quantity only */}
+                      <td className="px-6 py-4">{p.quantity}</td>
+                      {/* 🔁 new pack unit column */}
+                      <td className="px-6 py-4">{p.packUnit || "-"}</td>
                     </tr>
                   );
                 })
@@ -349,11 +364,13 @@ export default function StockPage() {
               Are you sure you want to empty the stock?
             </h3>
             <p className="text-sm text-gray-700 mb-4">
-              This action will set <strong>all product quantities to 0</strong>. This cannot be undone.
+              This action will set <strong>all product quantities to 0</strong>.
+              This cannot be undone.
             </p>
 
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Write <span className="font-bold">"CONFIRM"</span> if you want to continue
+              Write <span className="font-bold">"CONFIRM"</span> if you want to
+              continue
             </label>
             <input
               type="text"
