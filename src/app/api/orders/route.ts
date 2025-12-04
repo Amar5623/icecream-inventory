@@ -1,3 +1,4 @@
+// src/app/api/orders/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/lib/mongodb";
 import Order from "@/models/Order";
@@ -178,15 +179,6 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ error: "Order not found." }, { status: 404 });
     }
 
-    // For normal discard/settle we only allow Unsettled orders.
-    // For 'settleDebt' we intentionally allow already-settled Debt orders.
-    if (action !== "settleDebt" && order.status !== "Unsettled") {
-      return NextResponse.json(
-        { error: "Only Unsettled orders can be modified." },
-        { status: 400 }
-      );
-    }
-
     const billTotal = Number(order.total || 0);
 
     // Helper for customer updates
@@ -197,28 +189,38 @@ export async function PATCH(req: NextRequest) {
       });
     };
 
-    const adjustCustomerForPayment = async (payAmount: number) => {
+    /**
+     * Adjust customer's debit / credit for a payment against THIS order only.
+     *
+     * - payAmount: amount received now (Cash / Bank / UPI)
+     * - remainingForThisOrder: how much is still pending for this order BEFORE this payment
+     *
+     * We:
+     *   1. Reduce customer's debit by at most `remainingForThisOrder`
+     *   2. Any extra (payAmount - appliedToDebit) goes to customer's CREDIT
+     */
+    const adjustCustomerForPayment = async (
+      payAmount: number,
+      remainingForThisOrder: number
+    ) => {
       if (!order.customerId || payAmount <= 0) return;
+
       const customer: any = await Customer.findById(order.customerId);
       if (!customer) return;
 
-      let debit = Number(customer.debit || 0);
-      let credit = Number(customer.credit || 0);
+      const currentDebit = Number(customer.debit || 0);
 
-      let debitChange = 0;
-      let creditChange = 0;
+      // we won't reduce more debit than exists, or more than remaining for this order
+      const appliedToDebit = Math.min(
+        payAmount,
+        Math.max(0, remainingForThisOrder),
+        Math.max(0, currentDebit)
+      );
 
-      const newDebit = debit - payAmount;
+      const extraToCredit = payAmount - appliedToDebit; // if >0, goes to credit
 
-      if (newDebit >= 0) {
-        // still some debit left or exactly zero
-        debitChange = -payAmount;
-        creditChange = 0;
-      } else {
-        // overpayment -> clear debit, rest goes to credit
-        debitChange = -debit; // bring debit to 0
-        creditChange = -(newDebit); // positive extra => credit
-      }
+      const debitChange = -appliedToDebit;
+      const creditChange = extraToCredit > 0 ? extraToCredit : 0;
 
       await Customer.findByIdAndUpdate(order.customerId, {
         $inc: { debit: debitChange, credit: creditChange },
@@ -227,6 +229,14 @@ export async function PATCH(req: NextRequest) {
 
     // ===== DISCARD =====
     if (action === "discard") {
+      // Only Unsettled orders can be discarded
+      if (order.status !== "Unsettled") {
+        return NextResponse.json(
+          { error: "Only Unsettled orders can be discarded." },
+          { status: 400 }
+        );
+      }
+
       // 1) revert stock
       const allItems = [
         ...(Array.isArray(order.items) ? order.items : []),
@@ -274,7 +284,7 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ success: true, order }, { status: 200 });
     }
 
-    // ===== FIRST-TIME SETTLE FROM UNSETTLED TAB =====
+    // ===== FIRST-TIME / NORMAL SETTLE (from Unsettled tab) =====
     if (action === "settle") {
       if (method !== "Cash" && method !== "Bank/UPI" && method !== "Debt") {
         return NextResponse.json(
@@ -283,11 +293,29 @@ export async function PATCH(req: NextRequest) {
         );
       }
 
+      // Allow "settle" when:
+      //  - status is Unsettled (normal case), OR
+      //  - already settled but with settlementMethod = "Debt" (you might call this in some flows)
+      if (
+        order.status !== "Unsettled" &&
+        !(order.status === "settled" && order.settlementMethod === "Debt")
+      ) {
+        return NextResponse.json(
+          { error: "This order cannot be settled from this tab anymore." },
+          { status: 400 }
+        );
+      }
+
       // Debt -> no payment now, whole amount remains pending
       if (method === "Debt") {
         order.status = "settled";
         order.settlementMethod = "Debt";
-        order.settlementAmount = 0;
+        // first time settle from Unsettled -> nothing paid yet
+        const previousPaid =
+          typeof order.settlementAmount === "number"
+            ? order.settlementAmount
+            : 0;
+        order.settlementAmount = previousPaid; // typically 0
         order.settledAt = new Date();
 
         order.settlementHistory = order.settlementHistory || [];
@@ -296,6 +324,7 @@ export async function PATCH(req: NextRequest) {
           method: "Debt",
           amountPaid: 0,
           at: new Date(),
+          note: "Marked as Debt",
         });
 
         await order.save();
@@ -303,7 +332,7 @@ export async function PATCH(req: NextRequest) {
         return NextResponse.json({ success: true, order }, { status: 200 });
       }
 
-      // Cash / Bank: may be full or partial
+      // Cash / Bank: may be full / partial / over
       const payAmount = Math.max(0, Number(amount || 0));
       if (payAmount <= 0) {
         return NextResponse.json(
@@ -312,9 +341,16 @@ export async function PATCH(req: NextRequest) {
         );
       }
 
-      await adjustCustomerForPayment(payAmount);
+      // previousPaid can be 0 (normal Unsettled) or some amount (if it was already Debt and you continue via this path)
+      const previousPaid =
+        typeof order.settlementAmount === "number"
+          ? order.settlementAmount
+          : 0;
+      const remainingForThisOrder = Math.max(0, billTotal - previousPaid);
 
-      const totalPaid = payAmount;
+      await adjustCustomerForPayment(payAmount, remainingForThisOrder);
+
+      const totalPaid = previousPaid + payAmount;
       const fullyPaid = totalPaid >= billTotal;
 
       order.status = "settled";
@@ -326,7 +362,7 @@ export async function PATCH(req: NextRequest) {
       order.settlementHistory = order.settlementHistory || [];
       order.settlementHistory.push({
         action: "Settled",
-        method, // real payment method
+        method, // actual payment method
         amountPaid: payAmount,
         at: new Date(),
         note: fullyPaid
@@ -364,18 +400,22 @@ export async function PATCH(req: NextRequest) {
         );
       }
 
-      // Reduce customer's debit / adjust credit
-      await adjustCustomerForPayment(payAmount);
-
       const prevPaid =
         typeof order.settlementAmount === "number"
           ? order.settlementAmount
           : 0;
+
+      const remainingForThisOrder = Math.max(0, billTotal - prevPaid);
+
+      // Apply only up to remaining for THIS order to debit; extra to credit
+      await adjustCustomerForPayment(payAmount, remainingForThisOrder);
+
       const newTotalPaid = prevPaid + payAmount;
       const fullyPaid = newTotalPaid >= billTotal;
 
       order.status = "settled"; // stays settled
       order.settlementAmount = newTotalPaid;
+
       // if fully paid, move to Settled tab by changing method away from "Debt"
       order.settlementMethod = fullyPaid ? method : "Debt";
       order.settledAt = new Date();
