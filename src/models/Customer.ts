@@ -6,6 +6,7 @@ export interface ICustomer extends Document {
   contacts: string[]; // multiple contact numbers
   shopName: string;
   shopAddress: string;
+   area: string; 
   location?: {
     latitude?: number;
     longitude?: number;
@@ -31,6 +32,7 @@ const CustomerSchema = new Schema<ICustomer>(
     },
     shopName: { type: String, required: true },
     shopAddress: { type: String, required: true },
+     area: { type: String, required: true },
     location: {
       latitude: { type: Number, required: false },
       longitude: { type: Number, required: false },

@@ -10,6 +10,7 @@ interface Customer {
   contacts: string[];
   shopName: string;
   shopAddress: string;
+  area?: string;
   location?: { latitude?: number; longitude?: number };
   credit: number;
   debit: number;
@@ -116,7 +117,10 @@ export default function CustomerViewModal({
           <div className="bg-gray-50 rounded-lg p-4 shadow-sm">
             <div className="text-xs text-gray-600">Shop Address</div>
             <div className="text-sm text-gray-800">{customer.shopAddress}</div>
-
+            <div className="text-xs text-gray-600 mt-3">Area</div>
+            <div className="text-sm text-gray-800">
+              {customer.area || "-"}
+            </div>
             <div className="text-xs text-gray-600 mt-3">Location</div>
             <div className="text-sm text-gray-800 flex items-center gap-2">
               {customer.location?.latitude && customer.location?.longitude ? (

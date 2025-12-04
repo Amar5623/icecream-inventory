@@ -24,6 +24,7 @@ interface Customer {
   contacts: string[];
   shopName: string;
   shopAddress: string;
+  area?: string;
   location?: { latitude?: number; longitude?: number };
   credit: number;
   debit: number;
@@ -37,6 +38,7 @@ type FormState = {
   contacts: string[];
   shopName: string;
   shopAddress: string;
+  area: string;
   latitude: string;
   longitude: string;
   remarks: string;
@@ -65,6 +67,7 @@ export default function CustomersPage() {
     contacts: [""],
     shopName: "",
     shopAddress: "",
+    area: "",
     latitude: "",
     longitude: "",
     remarks: "",
@@ -178,6 +181,12 @@ export default function CustomersPage() {
       toast.error("Shop address is required");
       return;
     }
+    if (!form.area.trim()) {
+      toast.error("Area is required");
+      return;
+    }
+
+
 
     // build body
     const body: any = {
@@ -185,6 +194,7 @@ export default function CustomersPage() {
       contacts: form.contacts.map((c) => c.trim()).filter(Boolean),
       shopName: form.shopName.trim(),
       shopAddress: form.shopAddress.trim(),
+      area: form.area.trim(),
       location: {
         latitude: form.latitude ? Number(form.latitude) : undefined,
         longitude: form.longitude ? Number(form.longitude) : undefined,
@@ -238,6 +248,7 @@ export default function CustomersPage() {
         contacts: [""],
         shopName: "",
         shopAddress: "",
+        area: "",
         latitude: "",
         longitude: "",
         remarks: "",
@@ -263,6 +274,7 @@ export default function CustomersPage() {
       contacts: c.contacts?.length ? c.contacts.slice() : [""],
       shopName: c.shopName || "",
       shopAddress: c.shopAddress || "",
+      area: c.area || "",
       latitude: c.location?.latitude?.toString() ?? "",
       longitude: c.location?.longitude?.toString() ?? "",
       remarks: c.remarks || "",
@@ -314,10 +326,10 @@ export default function CustomersPage() {
   const openSettlementModal = (c: Customer) => {
     const credit = Number(c.credit ?? 0);
 
-  if (!credit || credit <= 0) {
-    toast.error("There is no credited amount for this customer.");
-    return;
-  }
+    if (!credit || credit <= 0) {
+      toast.error("There is no credited amount for this customer.");
+      return;
+    }
 
     setSettlementCustomer(c);
   };
@@ -361,6 +373,7 @@ export default function CustomersPage() {
         contacts: c.contacts,
         shopName: c.shopName,
         shopAddress: c.shopAddress,
+        area: c.area || "",
         location: c.location || {},
         remarks: c.remarks || "",
         credit: newCredit,
@@ -408,6 +421,7 @@ export default function CustomersPage() {
       return (
         c.name.toLowerCase().includes(q) ||
         c.shopName.toLowerCase().includes(q) ||
+        (c.area || "").toLowerCase().includes(q) ||
         c.contacts.join(" ").toLowerCase().includes(q)
       );
     });
@@ -439,15 +453,15 @@ export default function CustomersPage() {
     return list;
   }, [customers, search, sortMode]);
 
- const formatCurrency = (v?: number) => {
-  if (typeof v !== "number" || Number.isNaN(v)) return "-";
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(v);
-};
+  const formatCurrency = (v?: number) => {
+    if (typeof v !== "number" || Number.isNaN(v)) return "-";
+    return new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency: "INR",
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(v);
+  };
 
   const handleClearFilters = () => {
     setSearch("");
@@ -512,6 +526,7 @@ export default function CustomersPage() {
                     contacts: [""],
                     shopName: "",
                     shopAddress: "",
+                    area: "",
                     latitude: "",
                     longitude: "",
                     remarks: "",
@@ -535,9 +550,8 @@ export default function CustomersPage() {
 
         {/* Form */}
         <div
-          className={`overflow-hidden transition-all duration-300 ${
-            showForm ? "max-h-[1400px] mb-8" : "max-h-0"
-          }`}
+          className={`overflow-hidden transition-all duration-300 ${showForm ? "max-h-[1400px] mb-8" : "max-h-0"
+            }`}
         >
           <form
             onSubmit={handleSubmit}
@@ -649,6 +663,19 @@ export default function CustomersPage() {
                   setForm({ ...form, shopAddress: e.target.value })
                 }
                 placeholder="Full shop address"
+                required
+              />
+            </div>
+            {/* 👉 NEW AREA FIELD */}
+            <div>
+              <label className="text-sm font-medium text-gray-700 mb-1 block">
+                Area *
+              </label>
+              <input
+                className={inputBase + " text-base"}
+                value={form.area}
+                onChange={(e) => setForm({ ...form, area: e.target.value })}
+                placeholder="e.g. Gandhinagar, City Center"
                 required
               />
             </div>
@@ -777,6 +804,7 @@ export default function CustomersPage() {
                       contacts: [""],
                       shopName: "",
                       shopAddress: "",
+                       area: "",
                       latitude: "",
                       longitude: "",
                       remarks: "",
@@ -795,9 +823,8 @@ export default function CustomersPage() {
               <button
                 type="submit"
                 disabled={saving}
-                className={`inline-flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-5 py-2 rounded-lg ${
-                  saving ? "opacity-70" : ""
-                }`}
+                className={`inline-flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-5 py-2 rounded-lg ${saving ? "opacity-70" : ""
+                  }`}
               >
                 <FileText size={16} />{" "}
                 <span className="font-medium">
@@ -828,6 +855,7 @@ export default function CustomersPage() {
                   <th className="p-3 border-b">Name</th>
                   <th className="p-3 border-b">Primary Contact</th>
                   <th className="p-3 border-b">Shop</th>
+                  <th className="p-3 border-b">Area</th>          
                   <th className="p-3 border-b">Location</th>
                   <th className="p-3 border-b">Credit</th>
                   <th className="p-3 border-b">Debit</th>
@@ -881,6 +909,9 @@ export default function CustomersPage() {
                       </td>
                       <td className="p-3 align-top text-sm text-gray-700">
                         {c.shopName}
+                      </td>
+                      <td className="p-3 align-top text-sm text-gray-700">
+                        {c.area || "-"}                       {/* 👉 NEW */}
                       </td>
                       <td className="p-3 align-top text-sm text-gray-700">
                         {c.location?.latitude && c.location?.longitude ? (
@@ -1012,9 +1043,8 @@ export default function CustomersPage() {
               <button
                 onClick={confirmSettlement}
                 disabled={settling}
-                className={`px-4 py-2 rounded bg-green-600 text-white text-sm ${
-                  settling ? "opacity-70" : "hover:bg-green-700"
-                }`}
+                className={`px-4 py-2 rounded bg-green-600 text-white text-sm ${settling ? "opacity-70" : "hover:bg-green-700"
+                  }`}
               >
                 {settling ? "Settling..." : "Confirm"}
               </button>
@@ -1045,9 +1075,8 @@ export default function CustomersPage() {
               <button
                 onClick={performDelete}
                 disabled={deleting}
-                className={`px-4 py-2 rounded bg-red-600 text-white ${
-                  deleting ? "opacity-70" : ""
-                }`}
+                className={`px-4 py-2 rounded bg-red-600 text-white ${deleting ? "opacity-70" : ""
+                  }`}
               >
                 Delete
               </button>

@@ -8,9 +8,10 @@ export async function POST(req: Request) {
   try {
     await connectDB();
     const body = await req.json();
-    const { name, contacts, shopName, shopAddress,  userId } = body;
+const { name, contacts, shopName, shopAddress, area, userId } = body;
 
-    if (!name || !contacts?.length || !shopName || !shopAddress || !userId) {
+    if (!name || !contacts?.length || !shopName || !shopAddress || !area || !userId) 
+{
       return NextResponse.json(
         { error: "Missing required fields" },
         { status: 400 }
