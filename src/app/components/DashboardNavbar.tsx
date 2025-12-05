@@ -35,10 +35,10 @@ export default function DashboardNavbar({ userId }: { userId?: string }) {
   // Discover admin email
   useEffect(() => {
     try {
-      // @ts-ignore
       const nextData = (window as any).__NEXT_DATA__;
       const props = nextData?.props?.pageProps ?? nextData?.props?.initialProps;
       const maybeUser = props?.user ?? props?.currentUser ?? props?.session?.user;
+
       if (maybeUser?.email) {
         setAdminEmail(String(maybeUser.email).toLowerCase());
         return;
@@ -51,7 +51,9 @@ export default function DashboardNavbar({ userId }: { userId?: string }) {
         if (!r.ok) return;
         const j = await r.json();
         const maybeUser = j?.user ?? j;
-        if (maybeUser?.email) setAdminEmail(String(maybeUser.email).toLowerCase());
+        if (maybeUser?.email) {
+          setAdminEmail(String(maybeUser.email).toLowerCase());
+        }
       } catch (e) {}
     })();
 
@@ -117,19 +119,20 @@ export default function DashboardNavbar({ userId }: { userId?: string }) {
           ))}
         </nav>
 
-        {/* Right side: Notifications + Profile */}
+        {/* Right side */}
         <div className="flex items-center gap-4 ml-auto">
           {/* Notification Bell */}
           <Link href={requestsHref} className="relative" title="Delivery requests">
             <Bell size={22} className="text-white" />
 
-            {/* 🔴 RED BADGE FOR PENDING REQUESTS */}
             {pendingCount > 0 && (
-              <span className="
-                absolute -top-2 -right-2
-                bg-red-600 text-white text-xs
-                rounded-full px-1.5 py-0.5
-              ">
+              <span
+                className="
+                  absolute -top-2 -right-2
+                  bg-red-600 text-white text-xs
+                  rounded-full px-1.5 py-0.5
+                "
+              >
                 {pendingCount > 99 ? "99+" : pendingCount}
               </span>
             )}
