@@ -5,24 +5,20 @@ import DeliveryPartner from "@/models/DeliveryPartner";
 
 /**
  * DELETE /api/delivery/delete
- * body: { partnerId, userId?, adminEmail?, adminId? }
+ * body: { partnerId, userId?, adminId?, adminEmail? }
  *
- * Authorization:
- *   - owner: userId must match partner.createdByUser
- *   - adminEmail: must match partner.adminEmail (case-insensitive)
- *   - adminId: must equal process.env.ADMIN_ID (recommended)
- *
- * Returns 200 + partnerId on success.
+ * Authorization same as update route.
+ * Performs a deleteOne and returns partnerId on success.
  */
-
 export async function DELETE(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
-    const { partnerId, userId, adminEmail: adminEmailRaw, adminId: adminIdRaw } = body ?? {};
+    const { partnerId, userId, adminId, adminEmail: adminEmailRaw } = body ?? {};
 
     if (!partnerId) return NextResponse.json({ error: "partnerId required" }, { status: 400 });
-    if (!userId && !adminEmailRaw && !adminIdRaw) {
-      return NextResponse.json({ error: "userId or adminEmail or adminId required for authorization" }, { status: 400 });
+
+    if (!userId && !adminId && !adminEmailRaw && !process.env.NEXT_PUBLIC_ADMIN_EMAIL && !process.env.NEXT_PUBLIC_ADMIN_ID) {
+      return NextResponse.json({ error: "userId or adminId or adminEmail required for authorization" }, { status: 400 });
     }
 
     await connectDB();
@@ -30,12 +26,22 @@ export async function DELETE(req: Request) {
     const partner = await DeliveryPartner.findById(String(partnerId));
     if (!partner) return NextResponse.json({ error: "Partner not found" }, { status: 404 });
 
-    const okByUser = userId && String(partner.createdByUser) === String(userId);
-    const okByEmail = adminEmailRaw && partner.adminEmail && String(partner.adminEmail).toLowerCase() === String(adminEmailRaw).toLowerCase();
-    const serverAdminId = process.env.ADMIN_ID ? String(process.env.ADMIN_ID) : null;
-    const okByAdminId = adminIdRaw && serverAdminId && String(adminIdRaw) === serverAdminId;
+    const providedAdminEmail = adminEmailRaw ? String(adminEmailRaw).toLowerCase() : null;
+    const partnerAdminEmail = partner.adminEmail ? String(partner.adminEmail).toLowerCase() : null;
 
-    if (!okByUser && !okByEmail && !okByAdminId) {
+    const envAdminEmail = process.env.NEXT_PUBLIC_ADMIN_EMAIL ? String(process.env.NEXT_PUBLIC_ADMIN_EMAIL).toLowerCase() : null;
+    const envAdminId = process.env.NEXT_PUBLIC_ADMIN_ID ? String(process.env.NEXT_PUBLIC_ADMIN_ID) : null;
+
+    const createdByUserVal = partner.createdByUser ? String(partner.createdByUser) : null;
+
+    const okByOwner = userId && createdByUserVal && String(userId) === String(createdByUserVal);
+    const okByAdminIdMatchesOwner = adminId && createdByUserVal && String(adminId) === String(createdByUserVal);
+    const okByAdminEmail = providedAdminEmail && partnerAdminEmail && providedAdminEmail === partnerAdminEmail;
+    const okByEnvAdminEmail = envAdminEmail && (providedAdminEmail === envAdminEmail || partnerAdminEmail === envAdminEmail);
+    const okByEnvAdminId = envAdminId && adminId && String(adminId) === String(envAdminId);
+    const okByAdminIdGlobal = envAdminId && adminId && String(adminId) === String(envAdminId);
+
+    if (!okByOwner && !okByAdminIdMatchesOwner && !okByAdminEmail && !okByEnvAdminEmail && !okByEnvAdminId && !okByAdminIdGlobal) {
       return NextResponse.json({ error: "Not authorized to delete this partner" }, { status: 403 });
     }
 

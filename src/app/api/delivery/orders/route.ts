@@ -4,6 +4,7 @@ import { connectDB } from "@/lib/mongodb";
 import Order from "@/models/Order";
 import Customer from "@/models/Customer";
 import User from "@/models/User";
+import DeliveryPartner from "@/models/DeliveryPartner";
 import mongoose from "mongoose";
 
 /**
@@ -12,7 +13,8 @@ import mongoose from "mongoose";
  * Behavior:
  *  - By default onlyUnsettled=true (returns orders.status === "Unsettled")
  *  - Always exclude deliveryStatus === "Delivered"
- *  - If partnerId provided -> return orders assigned to that partner OR unassigned (deliveryPartnerId === partnerId OR deliveryPartnerId == null)
+ *  - If partnerId provided -> validate partner exists & is approved & belongs to shop (if userId provided)
+ *    then return orders assigned to that partner OR unassigned (deliveryPartnerId === partnerId OR deliveryPartnerId == null)
  *  - If only userId provided -> return all (unsettled) orders for that shop (userId)
  *
  * Response: array of orders with compact fields used by the delivery app
@@ -20,8 +22,7 @@ import mongoose from "mongoose";
  * has location.latitude / location.longitude, those values will be copied into
  * order.customerLat and order.customerLng (only when those fields are null/undefined).
  *
- * New: fetch the shop's shopName from the User collection (based on order.userId)
- *      and attach it as order.shopName when available.
+ * Also enrich orders with shopName from User collection when available.
  */
 export async function GET(req: Request) {
   try {
@@ -36,6 +37,29 @@ export async function GET(req: Request) {
     }
 
     await connectDB();
+
+    // If partnerId is provided, ensure partner exists and is allowed to access data
+    if (partnerId) {
+      const partner = await DeliveryPartner.findById(String(partnerId)).lean();
+      if (!partner) {
+        // Partner was deleted or never existed — do not give access
+        return NextResponse.json({ error: "Partner not found (deleted?)" }, { status: 404 });
+      }
+
+      // If partner is not approved, deny access (deleted/pending/rejected should not access)
+      const status = String(partner.status ?? "").toLowerCase();
+      if (status !== "approved") {
+        return NextResponse.json({ error: "Partner not authorized (not approved)" }, { status: 403 });
+      }
+
+      // If a shop userId is provided, ensure the partner belongs to that shop (defense-in-depth)
+      if (userId) {
+        // partner.createdByUser may be null (global partner) — if present, must match
+        if (partner.createdByUser && String(partner.createdByUser) !== String(userId)) {
+          return NextResponse.json({ error: "Partner not associated with this shop" }, { status: 403 });
+        }
+      }
+    }
 
     const filter: any = {};
 
@@ -80,7 +104,6 @@ export async function GET(req: Request) {
     // fetch orders
     const orders: any[] = await Order.find(filter, projection).sort({ createdAt: -1 }).lean();
 
-    // If no orders or none have customerId, still try to return empty array (but may still need to attach shop names)
     if (!orders || orders.length === 0) {
       return NextResponse.json([], { status: 200 });
     }
@@ -129,7 +152,6 @@ export async function GET(req: Request) {
     // --------------------------
     // Enrich with shopName from User collection
     // --------------------------
-    // Collect unique userIds from orders
     const orderUserIds = Array.from(
       new Set(
         orders
@@ -139,7 +161,6 @@ export async function GET(req: Request) {
     );
 
     if (orderUserIds.length > 0) {
-      // Build query-safe id list: prefer ObjectId if possible, else strings
       const idsForQuery: any[] = [];
       for (const id of orderUserIds) {
         if (mongoose.Types.ObjectId.isValid(id)) idsForQuery.push(new mongoose.Types.ObjectId(id));
@@ -155,13 +176,11 @@ export async function GET(req: Request) {
 
         for (const order of orders) {
           try {
-            // If order already has a shopName stored, prefer that; otherwise attach from User
             if ((!order.shopName || String(order.shopName).trim().length === 0) && order.userId) {
               const u = userMap[String(order.userId)];
               if (u && typeof u.shopName === "string" && u.shopName.trim().length > 0) {
                 order.shopName = u.shopName;
               } else {
-                // explicitly set null if not found to avoid undefined in client
                 order.shopName = order.shopName ?? null;
               }
             }
